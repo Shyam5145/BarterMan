@@ -27,3 +27,6 @@ logs/
 # macOS metadata (AppleDouble stubs from copying off a Mac)
 ._*
 .DS_Store
+
+# Firebase CLI deploy cache
+.firebase/

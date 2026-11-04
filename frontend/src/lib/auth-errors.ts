@@ -19,7 +19,9 @@ const MESSAGES: Record<string, string> = {
   "auth/network-request-failed": "Network error. Check your connection and try again.",
   "auth/user-disabled": "This account has been disabled.",
   "auth/unauthorized-domain": "This site isn't authorized for sign-in yet. Add it under Firebase Authentication > Settings > Authorized domains.",
-  "auth/operation-not-allowed": "This sign-in method isn't enabled yet in Firebase Authentication.",
+  "auth/requires-recent-login": "For your security, sign out and continue with Google again, then create your password.",
+  "auth/credential-already-in-use": "This email already has a separate Barterman password account. Sign out and sign in with that email and password instead.",
+  "auth/operation-not-allowed":"This sign-in method isn't enabled yet in Firebase Authentication.",
 }
 
 export function describeAuthError(error: unknown, fallback = "Something went wrong. Please try again."): string {

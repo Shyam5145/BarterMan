@@ -21,6 +21,8 @@ export type AppUser = {
 }
 
 export type ProfileDetails = {
+  /** Optional: Complete Profile keeps the sign-in name; the profile page can change it. */
+  name?: string
   college: string
   course: string
   year: string

@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import { COLLEGES_BY_DOMAIN } from '../config/colleges.js';
 import { env } from '../config/env.js';
+import { collegeForEmail } from '../utils/emailDomains.js';
 import { requireAuth } from '../middleware/auth.js';
 import { validateBody } from '../middleware/validate.js';
 import { User } from '../models/User.js';
@@ -10,7 +12,7 @@ export const authRouter = Router();
 
 // Public: lets the sign-in and register screens show and pre-check the allowed domains.
 authRouter.get('/config', (_req, res) => {
-  res.json({ allowedEmailDomains: env.allowedEmailDomains });
+  res.json({ allowedEmailDomains: env.allowedEmailDomains, collegesByDomain: COLLEGES_BY_DOMAIN });
 });
 
 const sessionSchema = z.object({
@@ -43,6 +45,8 @@ authRouter.post(
       if (!user.avatarUrl && picture) user.avatarUrl = picture;
     }
 
+    // Pre-fill the college from the email domain so Complete Profile starts with it.
+    if (!user.college) user.college = collegeForEmail(email);
     user.lastLoginAt = new Date();
     await user.save();
     res.json({ user });

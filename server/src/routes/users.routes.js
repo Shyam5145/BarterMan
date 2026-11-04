@@ -4,6 +4,7 @@ import { loadCurrentUser, requireAuth } from '../middleware/auth.js';
 import { validateBody } from '../middleware/validate.js';
 import { Listing, SELLER_PUBLIC_FIELDS } from '../models/Listing.js';
 import { YEAR_OPTIONS } from '../models/User.js';
+import { collegeForEmail } from '../utils/emailDomains.js';
 import { ApiError, asyncHandler } from '../utils/http.js';
 import { myListingsQuerySchema } from '../validators/listing.js';
 
@@ -48,6 +49,9 @@ usersRouter.put(
   validateBody(profileSchema),
   asyncHandler(async (req, res) => {
     req.user.set(req.body);
+    // A known college email decides the college; it can't be edited to something else.
+    const college = collegeForEmail(req.user.email);
+    if (college) req.user.college = college;
     if (!req.user.profileCompletedAt) req.user.profileCompletedAt = new Date();
     await req.user.save();
     res.json({ user: req.user });

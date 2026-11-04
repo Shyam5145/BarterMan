@@ -3,8 +3,10 @@ import express from 'express';
 import { env } from './config/env.js';
 import { errorHandler, notFound } from './middleware/errorHandler.js';
 import { authRouter } from './routes/auth.routes.js';
+import { conversationsRouter } from './routes/conversations.routes.js';
 import { listingsRouter } from './routes/listings.routes.js';
 import { usersRouter } from './routes/users.routes.js';
+import { wishlistRouter } from './routes/wishlist.routes.js';
 
 export const app = express();
 
@@ -24,8 +26,10 @@ app.get('/api/health', health); // kept for existing callers
 const v1 = express.Router();
 v1.get('/health', health);
 v1.use('/auth', authRouter);
+v1.use('/users/me/wishlist', wishlistRouter);
 v1.use('/users', usersRouter);
 v1.use('/listings', listingsRouter);
+v1.use('/conversations', conversationsRouter);
 app.use('/api/v1', v1);
 
 app.use('/api', notFound);

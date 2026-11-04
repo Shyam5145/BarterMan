@@ -10,7 +10,15 @@ function bearerToken(req) {
 
 // Verifies the Firebase ID token and enforces the verified-email and college-domain rules.
 export const requireAuth = asyncHandler(async (req, _res, next) => {
-  const token = bearerToken(req);
+  req.auth = await verifyAccessToken(bearerToken(req));
+  next();
+});
+
+/**
+ * Checks a Firebase ID token against Barterman's sign-in rules and returns the caller's identity.
+ * Shared by HTTP requests and Socket.IO connections. Throws ApiError when access is denied.
+ */
+export async function verifyAccessToken(token) {
   if (!token) {
     throw new ApiError(401, 'UNAUTHENTICATED', 'Sign in to continue.');
   }
@@ -36,15 +44,14 @@ export const requireAuth = asyncHandler(async (req, _res, next) => {
     );
   }
 
-  req.auth = {
+  return {
     uid: decoded.uid,
     email: decoded.email.toLowerCase(),
     name: decoded.name ?? '',
     picture: decoded.picture ?? '',
     provider: decoded.firebase?.sign_in_provider ?? 'unknown',
   };
-  next();
-});
+}
 
 // For public routes that show more to a signed-in viewer: sets req.user when a valid token is
 // sent, and otherwise continues anonymously instead of failing.

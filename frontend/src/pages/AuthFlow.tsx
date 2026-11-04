@@ -1,6 +1,6 @@
 import { FormEvent, ReactNode, useEffect, useState } from "react"
 import { useAuth } from "@/context/AuthContext"
-import { formatDomainList, isEmailAllowed } from "@/lib/email-domains"
+import { collegeForEmail, formatDomainList, isEmailAllowed } from "@/lib/email-domains"
 import { YEAR_OPTIONS, type ProfileDetails } from "@/types/user"
 
 type AuthLink = "/sign-in" | "/register" | "/forgot-password"
@@ -259,8 +259,52 @@ function GoogleMark() {
   return <svg aria-hidden="true" viewBox="0 0 48 48" className="google-mark"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5Z" transform="translate(0 5)"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.76 7.18l7.73 6C44.42 38.02 46.98 31.8 46.98 24.55Z" transform="translate(0 0)"/><path fill="#FBBC05" d="M10.53 28.59A14.4 14.4 0 0 1 9.75 24c0-1.59.27-3.13.76-4.59l-7.98-6.19A23.9 23.9 0 0 0 0 24c0 3.87.93 7.53 2.56 10.78l7.97-6.19Z" transform="translate(0 0)"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.9-5.8l-7.73-6c-2.14 1.44-4.88 2.3-8.17 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48Z" transform="translate(0 -5)"/></svg>
 }
 
+/** Shown after a new user signs up with Google: adds a password to the same account. */
+export function CreatePassword() {
+  const { firebaseUser, createPassword, signOut } = useAuth()
+  const [form, setForm] = useState({ password: "", confirm: "" })
+  const [pending, setPending] = useState(false)
+  const [error, setError] = useState("")
+  const email = firebaseUser?.email ?? ""
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setError("")
+    if (form.password.length < MIN_PASSWORD_LENGTH) return setError(`Use at least ${MIN_PASSWORD_LENGTH} characters for your password.`)
+    if (form.password !== form.confirm) return setError("The passwords don't match.")
+    setPending(true)
+    try {
+      await createPassword(form.password)
+    } catch (cause) {
+      setError(errorMessage(cause, "We couldn't save your password. Please try again."))
+      setPending(false)
+    }
+  }
+
+  return (
+    <AuthCard labelledBy="create-password-heading">
+      <div className="auth-copy">
+        <span className="auth-eyebrow">Secure your account</span>
+        <h1 id="create-password-heading">Create a password</h1>
+        <p>You signed up with Google. Set a Barterman password too, so you can also sign in with your college email.</p>
+      </div>
+      <form className="auth-form" onSubmit={submit} noValidate>
+        {/* Lets password managers save the new password against the right email. */}
+        <label>College email<input type="email" autoComplete="username" value={email} readOnly /></label>
+        <label>Password<input type="password" autoComplete="new-password" required minLength={MIN_PASSWORD_LENGTH} value={form.password} onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))} placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`} autoFocus /></label>
+        <label>Confirm password<input type="password" autoComplete="new-password" required value={form.confirm} onChange={(event) => setForm((current) => ({ ...current, confirm: event.target.value }))} /></label>
+        <button className="auth-primary-button" type="submit" disabled={pending}>{pending ? "Saving…" : <>Continue <span aria-hidden="true">→</span></>}</button>
+      </form>
+      {error && <p className="auth-error" role="alert">{error}</p>}
+      <div className="auth-link-row auth-link-row-center">
+        <button type="button" className="auth-text-button" onClick={() => void signOut()}>Not you? Sign out</button>
+      </div>
+    </AuthCard>
+  )
+}
+
 export function CompleteProfile({ onSaved }: { onSaved: () => void }) {
-  const { user, saveProfile, signOut } = useAuth()
+  const { user, saveProfile, signOut, collegesByDomain } = useAuth()
   const [details, setDetails] = useState<ProfileDetails>(() => ({
     college: user?.college ?? "",
     course: user?.course ?? "",
@@ -272,13 +316,17 @@ export function CompleteProfile({ onSaved }: { onSaved: () => void }) {
 
   if (!user) return <AuthLoading />
 
+  // A known college email decides the college (the server enforces this too).
+  const emailCollege = collegeForEmail(user.email, collegesByDomain)
+  const college = emailCollege || details.college
+
   const update = (key: keyof ProfileDetails, value: string) => setDetails((current) => ({ ...current, [key]: value }))
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     setError("")
     setSaving(true)
     try {
-      await saveProfile(details)
+      await saveProfile({ ...details, college })
       onSaved()
     } catch (cause) {
       setError(errorMessage(cause, "We couldn't save your profile. Please try again."))
@@ -299,11 +347,19 @@ export function CompleteProfile({ onSaved }: { onSaved: () => void }) {
         </div>
         <form className="profile-form" onSubmit={submit}>
           <label>Full name<input value={user.name} readOnly /></label>
-          <label>Email address<input value={user.email} readOnly type="email" /></label>
-          <label>College / University<input required autoComplete="organization" placeholder="e.g. PES University" value={details.college} onChange={(event) => update("college", event.target.value)} /></label>
+          <label>
+            <span className="profile-label-row">Phone number <span className="optional-label">Optional</span></span>
+            <input type="tel" autoComplete="tel" placeholder="Add a contact number" value={details.phone} onChange={(event) => update("phone", event.target.value)} />
+          </label>
+          <label className="profile-field-wide">Email address<input value={user.email} readOnly type="email" title={user.email} /></label>
+          <label className="profile-field-wide">
+            <span className="profile-label-row">College / University {emailCollege && <span className="optional-label">From your college email</span>}</span>
+            {emailCollege
+              ? <input value={emailCollege} readOnly />
+              : <input required autoComplete="organization" placeholder="e.g. PES University" value={details.college} onChange={(event) => update("college", event.target.value)} />}
+          </label>
           <label>Course / Department<input required placeholder="e.g. Computer Science" value={details.course} onChange={(event) => update("course", event.target.value)} /></label>
           <label>Year of study<select required value={details.year} onChange={(event) => update("year", event.target.value)}><option value="" disabled>Select your year</option>{YEAR_OPTIONS.map((year) => <option key={year}>{year}</option>)}</select></label>
-          <label>Phone number <span className="optional-label">Optional</span><input type="tel" autoComplete="tel" placeholder="Add a contact number" value={details.phone} onChange={(event) => update("phone", event.target.value)} /></label>
           {error && <p className="auth-error profile-form-error" role="alert">{error}</p>}
           <button className="auth-primary-button" type="submit" disabled={saving}>{saving ? "Saving…" : <>Continue <span aria-hidden="true">→</span></>}</button>
         </form>

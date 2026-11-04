@@ -13,7 +13,7 @@ export const LISTING_CONDITIONS = ["Like New", "Very Good", "Good", "Fair"] as c
 export const RENTAL_DURATIONS = ["Per day", "Per week", "Per month", "Flexible"] as const
 
 export type ListingType = "for_sale" | "for_rent"
-export type ListingStatus = "active" | "draft" | "pending" | "sold" | "rented" | "exchanged" | "archived"
+export type ListingStatus = "active" | "draft" | "pending" | "sold" | "rented" | "archived"
 export type ListingSort = "newest" | "price_asc" | "price_desc"
 
 /** A photo stored in Cloudinary; MongoDB keeps only its URL and public ID. */

@@ -52,6 +52,26 @@ API routes live under `/api/v1`:
 | `POST /listings`, `PUT /listings/:id` | Create or update; multipart `data` JSON + up to 10 `photos` (5MB each) |
 | `PATCH /listings/:id/status` | Mark sold / rented / exchanged / archived, or relist |
 | `DELETE /listings/:id` | Delete the listing and its Cloudinary photos |
+| `GET /conversations` | Your inbox, most recent first |
+| `POST /conversations` | Open (or create) your chat with a listing's seller (`{ listingId }`) |
+| `GET /conversations/:id` | One conversation |
+| `GET /conversations/:id/messages` | Message history, oldest first (`before`, `limit` to page back) |
+| `POST /conversations/:id/messages` | Send a message (`{ text, clientId? }`) |
+| `POST /conversations/:id/read` | Mark the conversation read (sends a read receipt) |
+| `GET /conversations/unread-count` | Total unread messages |
+
+### Real-time chat (Socket.IO)
+
+Socket.IO runs on the same server and port as the API (path `/socket.io`), so no extra Render setup is needed. A client connects with its Firebase ID token (`auth: { token }`); the same sign-in rules as the API apply. Messages are saved through the REST routes above, and the server then pushes these events to the people in the conversation:
+
+| Event | Direction | Payload |
+|---|---|---|
+| `message:new` | server → client | `{ conversation, message, clientId? }` |
+| `conversation:read` | server → client | `{ conversationId, readerId, readAt }` |
+| `unread:count` | server → client | `{ total }` |
+| `typing` | both | client sends `{ conversationId, isTyping }`; the other person receives it with `userId` |
+
+In development, Vite proxies `/socket.io` (including WebSockets) to port 5000.
 
 ## Run both from the repository root
 

@@ -1,7 +1,9 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react"
 import {
+  EmailAuthProvider,
   GoogleAuthProvider,
   createUserWithEmailAndPassword,
+  linkWithCredential,
   onAuthStateChanged,
   reload,
   sendEmailVerification,
@@ -22,11 +24,12 @@ import type { AppUser, ProfileDetails } from "@/types/user"
 /**
  * loading       – checking Firebase / syncing with the API
  * signed-out    – no Firebase user
- * unverified    – email/password account whose email isn't verified yet
- * needs-profile – signed in, but Complete Profile hasn't been saved
- * ready         – signed in with a complete MongoDB profile
+ * unverified     – email/password account whose email isn't verified yet
+ * needs-password – new Google sign-up that hasn't created a Barterman password yet
+ * needs-profile  – signed in, but Complete Profile hasn't been saved
+ * ready          – signed in with a complete MongoDB profile
  */
-export type AuthStatus = "loading" | "signed-out" | "unverified" | "needs-profile" | "ready"
+export type AuthStatus = "loading" | "signed-out" | "unverified" | "needs-password" | "needs-profile" | "ready"
 
 type RegisterInput = { name: string; email: string; password: string }
 
@@ -36,6 +39,8 @@ type AuthContextValue = {
   firebaseUser: FirebaseUser | null
   isConfigured: boolean
   allowedEmailDomains: string[]
+  /** Known colleges by email domain, used to fill in the college on Complete Profile. */
+  collegesByDomain: Record<string, string>
   /** Error from the last session sync (for example, a non-college email). Shown on the sign-in screen. */
   authError: string
   clearAuthError: () => void
@@ -44,6 +49,8 @@ type AuthContextValue = {
   registerWithEmail: (input: RegisterInput) => Promise<void>
   sendPasswordReset: (email: string) => Promise<void>
   resendVerificationEmail: () => Promise<void>
+  /** Adds an email/password login to the signed-in (Google) account. */
+  createPassword: (password: string) => Promise<void>
   /** Re-checks verification; returns false if the email still isn't verified. */
   confirmEmailVerified: () => Promise<boolean>
   saveProfile: (details: ProfileDetails) => Promise<void>
@@ -60,7 +67,20 @@ function requireAuth(): Auth {
 }
 
 function needsEmailVerification(user: FirebaseUser) {
-  return !user.emailVerified && user.providerData.some((provider) => provider.providerId === "password")
+  return !user.emailVerified && hasPassword(user)
+}
+
+function hasPassword(user: FirebaseUser) {
+  return user.providerData.some((provider) => provider.providerId === "password")
+}
+
+/**
+ * New accounts must have a password, including ones created with Google, so students can
+ * also sign in with email and password. Existing accounts (profile already saved) aren't asked.
+ */
+function statusAfterSync(account: FirebaseUser, appUser: AppUser): AuthStatus {
+  if (appUser.isProfileComplete) return "ready"
+  return hasPassword(account) ? "needs-profile" : "needs-password"
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -68,6 +88,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AppUser | null>(null)
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null)
   const [allowedEmailDomains, setAllowedEmailDomains] = useState<string[]>([])
+  const [collegesByDomain, setCollegesByDomain] = useState<Record<string, string>>({})
   const [authError, setAuthError] = useState("")
 
   // Creates or loads the MongoDB user for this Firebase account. On failure the Firebase
@@ -80,7 +101,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       })
       if (firebaseAuth?.currentUser?.uid !== account.uid) return
       setUser(appUser)
-      setStatus(appUser.isProfileComplete ? "ready" : "needs-profile")
+      setStatus(statusAfterSync(account, appUser))
     } catch (error) {
       setUser(null)
       setAuthError(error instanceof ApiError ? error.message : "We couldn't finish signing you in. Please try again.")
@@ -109,8 +130,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [syncSession])
 
   useEffect(() => {
-    apiRequest<{ allowedEmailDomains: string[] }>("/auth/config", { auth: false })
-      .then((config) => setAllowedEmailDomains(config.allowedEmailDomains))
+    apiRequest<{ allowedEmailDomains: string[]; collegesByDomain?: Record<string, string> }>("/auth/config", { auth: false })
+      .then((config) => {
+        setAllowedEmailDomains(config.allowedEmailDomains)
+        setCollegesByDomain(config.collegesByDomain ?? {})
+      })
       .catch(() => undefined)
   }, [])
 
@@ -170,6 +194,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  const createPassword = useCallback(async (password: string) => {
+    const current = requireAuth().currentUser
+    if (!current?.email) throw new Error("Sign in again to create your password.")
+    try {
+      await linkWithCredential(current, EmailAuthProvider.credential(current.email, password))
+    } catch (error) {
+      // Already has a password (e.g. set in another tab): nothing left to do.
+      const code = error instanceof Error && "code" in error ? error.code : ""
+      if (code !== "auth/provider-already-linked") throw new Error(describeAuthError(error))
+    }
+    await reload(current)
+    setStatus("needs-profile")
+  }, [])
+
   const confirmEmailVerified = useCallback(async () => {
     const current = requireAuth().currentUser
     if (!current) return false
@@ -202,6 +240,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       firebaseUser,
       isConfigured: isFirebaseConfigured,
       allowedEmailDomains,
+      collegesByDomain,
       authError: authError || (isFirebaseConfigured ? "" : NOT_CONFIGURED),
       clearAuthError,
       signInWithGoogle,
@@ -209,11 +248,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       registerWithEmail,
       sendPasswordReset,
       resendVerificationEmail,
+      createPassword,
       confirmEmailVerified,
       saveProfile,
       signOut,
     }),
-    [status, user, firebaseUser, allowedEmailDomains, authError, clearAuthError, signInWithGoogle, signInWithEmail, registerWithEmail, sendPasswordReset, resendVerificationEmail, confirmEmailVerified, saveProfile, signOut],
+    [status, user, firebaseUser, allowedEmailDomains, collegesByDomain, authError, clearAuthError, signInWithGoogle, signInWithEmail, registerWithEmail, sendPasswordReset, resendVerificationEmail, createPassword, confirmEmailVerified, saveProfile, signOut],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

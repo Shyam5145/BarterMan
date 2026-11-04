@@ -3,8 +3,15 @@ import { motion, useMotionValueEvent, useScroll } from "motion/react"
 import { ContainerScroll } from "./components/ui/container-scroll-animation"
 import { FlipWords } from "./components/ui/flip-words"
 import RequestCampus from "./pages/RequestCampus"
-import { AuthLoading, CompleteProfile, ForgotPassword, OnboardingNext, Register, SignIn, VerifyEmail } from "./pages/AuthFlow"
+import { AuthLoading, CompleteProfile, CreatePassword, ForgotPassword, OnboardingNext, Register, SignIn, VerifyEmail } from "./pages/AuthFlow"
 import { useAuth, type AuthStatus } from "./context/AuthContext"
+import { useRealtime } from "./context/RealtimeContext"
+import { Avatar } from "./components/Avatar"
+import { useIsMobile } from "./hooks/useIsMobile"
+import Messages from "./pages/Messages"
+import Profile from "./pages/Profile"
+import { useWishlist } from "./context/WishlistContext"
+import { fetchWishlist, type SavedListing } from "./lib/wishlist"
 import {
   deleteListing,
   fetchListing,
@@ -46,6 +53,7 @@ type Route =
   | "/register"
   | "/forgot-password"
   | "/verify-email"
+  | "/create-password"
   | "/complete-profile"
   | "/onboarding-next"
 
@@ -158,28 +166,50 @@ function scrollToHomeSection(id: string, go: (route: Route) => void, route: Rout
 }
 
 function Header({ go, route, signedIn, onSignOut }: { go: (route: Route) => void; route: Route; signedIn: boolean; onSignOut: () => void }) {
+  const { unreadTotal } = useRealtime()
+  // Phones: the links collapse into a menu opened by the ☰ button.
+  const [menuOpen, setMenuOpen] = useState(false)
+  useEffect(() => setMenuOpen(false), [route])
+  const open = (next: Route) => {
+    setMenuOpen(false)
+    go(next)
+  }
   const authButton = signedIn
-    ? <button onClick={onSignOut}>Sign Out</button>
-    : <button onClick={() => go("/sign-in")}>Sign In</button>
+    ? <button onClick={() => { setMenuOpen(false); onSignOut() }}>Sign Out</button>
+    : <button onClick={() => open("/sign-in")}>Sign In</button>
   return (
-    <header className={route === "/" ? "site-header" : "site-header site-header-pinned"}>
+    <header className={`${route === "/" ? "site-header" : "site-header site-header-pinned"}${menuOpen ? " nav-menu-open" : ""}`}>
       <div className="nav-shell">
-        <button className="brand" onClick={() => go("/")}>
+        <button className="brand" onClick={() => open("/")}>
           Barterman
         </button>
-        <nav>
-          <button onClick={() => go("/marketplace")}>Explore</button>
+        <button
+          type="button"
+          className="nav-menu-toggle"
+          aria-expanded={menuOpen}
+          aria-controls="site-nav"
+          aria-label={menuOpen ? "Close menu" : unreadTotal ? `Open menu, ${unreadTotal} unread messages` : "Open menu"}
+          onClick={() => setMenuOpen((current) => !current)}
+        >
+          <span aria-hidden="true">{menuOpen ? "✕" : "☰"}</span>
+          {!menuOpen && unreadTotal > 0 && <span className="nav-unread-badge" aria-hidden="true">{unreadTotal > 99 ? "99+" : unreadTotal}</span>}
+        </button>
+        <nav id="site-nav">
+          <button className="nav-explore" onClick={() => open("/marketplace")}>Explore</button>
           {route === "/" ? (
             <>
-              <button className="home-anchor-link" onClick={() => scrollToHomeSection("how-it-works", go, route)}>How It Works</button>
+              <button className="home-anchor-link" onClick={() => { setMenuOpen(false); scrollToHomeSection("how-it-works", go, route) }}>How It Works</button>
               {authButton}
-              <button className="nav-join" onClick={() => go("/request-campus")}>Join your campus</button>
+              <button className="nav-join" onClick={() => open("/request-campus")}>Join your campus</button>
             </>
           ) : (
             <>
-              <button onClick={() => go("/seller-hub")}>Sell an Item</button>
-              <button onClick={() => go("/messages")}>Messages</button>
-              <button className="profile-link" onClick={() => go("/profile")}>
+              <button onClick={() => open("/seller-hub")}>Sell an Item</button>
+              <button onClick={() => open("/messages")} aria-label={unreadTotal ? `Messages, ${unreadTotal} unread` : undefined}>
+                Messages
+                {unreadTotal > 0 && <span className="nav-unread-badge" aria-hidden="true">{unreadTotal > 99 ? "99+" : unreadTotal}</span>}
+              </button>
+              <button className="profile-link" onClick={() => open("/profile")}>
                 <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                   <circle cx="12" cy="8" r="4" />
                   <path d="M5 21a7 7 0 0 1 14 0" />
@@ -596,11 +626,6 @@ function PublicLanding({ go }: { go: (route: Route) => void }) {
 }
 
 // Shows the user's photo, or their initial when they have none (for example, email sign-ups).
-function Avatar({ src, name, className = "", alt = "" }: { src?: string; name: string; className?: string; alt?: string }) {
-  if (src) return <img className={className || undefined} src={src} alt={alt} referrerPolicy="no-referrer" />
-  return <span className={`avatar-fallback ${className}`.trim()} aria-hidden="true">{(name.trim()[0] ?? "?").toUpperCase()}</span>
-}
-
 function HeartIcon({ filled }: { filled: boolean }) {
   return <svg width="13" height="13" viewBox="0 0 24 24" fill={filled ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
 }
@@ -639,8 +664,8 @@ function ListingCard({ listing, saved, onToggleSaved, onOpen }: {
     >
       <div className="image-wrap">
         {cover && <img src={cover} alt="" loading="lazy" />}
-        <span>{listingTag(listing)}</span>
-        <b aria-label={saved ? "Remove from saved" : "Save"} className={saved ? "wishlist-active" : ""} onClick={onToggleSaved}>
+        <span>{listing.status === "active" ? listingTag(listing) : statusLabel(listing.status).toUpperCase()}</span>
+        <b role="button" aria-label={saved ? "Remove from wishlist" : "Add to wishlist"} aria-pressed={saved} className={saved ? "wishlist-active" : ""} onClick={onToggleSaved}>
           <HeartIcon filled={saved} />
         </b>
       </div>
@@ -656,8 +681,21 @@ function ListingCard({ listing, saved, onToggleSaved, onOpen }: {
   )
 }
 
+/** Marketplace chip that shows the signed-in student's hearted listings (no separate page). */
+const WISHLIST_FILTER_ID = "wishlist"
+
+function sortListings(items: Listing[], sort: ListingSort) {
+  if (sort === "newest") return items
+  const price = (listing: Listing) => (listing.listingType === "for_rent" ? listing.rentalPrice : listing.price) ?? 0
+  return [...items].sort((left, right) => (sort === "price_asc" ? price(left) - price(right) : price(right) - price(left)))
+}
+
 function Marketplace({ go }: { go: (route: Route) => void }) {
-  const { user } = useAuth()
+  const { user, status: authStatus } = useAuth()
+  const wishlist = useWishlist()
+  const [savedListings, setSavedListings] = useState<SavedListing[]>([])
+  const [savedState, setSavedState] = useState<"loading" | "ready" | "error">("loading")
+  const [savedError, setSavedError] = useState("")
   const [query, setQuery] = useState("")
   const [searchTerm, setSearchTerm] = useState("")
   const [filterId, setFilterId] = useState("all")
@@ -670,8 +708,9 @@ function Marketplace({ go }: { go: (route: Route) => void }) {
   const [loadingMore, setLoadingMore] = useState(false)
   const [loadError, setLoadError] = useState("")
   const [reloadKey, setReloadKey] = useState(0)
-  // Saved items stay in this page's memory until the wishlist API exists.
+  // Hearts on the sample cards only (they aren't real listings, so they aren't saved to the account).
   const [savedItems, setSavedItems] = useState<Record<string, boolean>>({})
+  const wishlistMode = filterId === WISHLIST_FILTER_ID
 
   useEffect(() => {
     const timer = window.setTimeout(() => setSearchTerm(query.trim()), 300)
@@ -680,7 +719,28 @@ function Marketplace({ go }: { go: (route: Route) => void }) {
 
   const filter = MARKET_FILTERS.find((item) => item.id === filterId) ?? MARKET_FILTERS[0]
 
+  // Wishlist chip: load the saved listings (with their current status) from the account.
   useEffect(() => {
+    if (!wishlistMode || authStatus !== "ready") return
+    let cancelled = false
+    setSavedState("loading")
+    setSavedError("")
+    fetchWishlist()
+      .then((items) => {
+        if (cancelled) return
+        setSavedListings(items)
+        setSavedState("ready")
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return
+        setSavedError(error instanceof Error ? error.message : "We couldn't load your wishlist.")
+        setSavedState("error")
+      })
+    return () => { cancelled = true }
+  }, [wishlistMode, authStatus, reloadKey])
+
+  useEffect(() => {
+    if (wishlistMode) return
     let cancelled = false
     setLoadState("loading")
     setLoadError("")
@@ -699,7 +759,7 @@ function Marketplace({ go }: { go: (route: Route) => void }) {
         setLoadState("error")
       })
     return () => { cancelled = true }
-  }, [searchTerm, sort, filter, reloadKey])
+  }, [searchTerm, sort, filter, reloadKey, wishlistMode])
 
   const loadMore = async () => {
     setLoadingMore(true)
@@ -721,9 +781,36 @@ function Marketplace({ go }: { go: (route: Route) => void }) {
     setSavedItems((previous) => ({ ...previous, [key]: !previous[key] }))
   }
 
+  // Real listings are saved to the student's account; signed-out visitors are asked to sign in.
+  const toggleWishlist = (listingId: string, event: React.MouseEvent) => {
+    event.stopPropagation()
+    void wishlist.toggle(listingId).then((result) => {
+      if (result === "sign-in") go("/sign-in")
+    })
+  }
+
+  const chooseFilter = (id: string) => {
+    if (id === WISHLIST_FILTER_ID && authStatus !== "ready") {
+      go("/sign-in")
+      return
+    }
+    setFilterId(id)
+  }
+
+  // In the Wishlist chip, un-hearted cards disappear right away; search and sort apply here too.
+  const visibleSaved = useMemo(() => {
+    const term = searchTerm.toLowerCase()
+    const items = savedListings.filter(
+      (listing) => wishlist.isSaved(listing.id) && (!term || `${listing.title} ${listing.category} ${listing.description}`.toLowerCase().includes(term)),
+    )
+    return sortListings(items, sort)
+  }, [savedListings, wishlist, searchTerm, sort])
+
   // Until students publish real listings, show the original sample cards so the page isn't empty.
-  const showSamples = loadState === "ready" && total === 0 && !searchTerm && filterId === "all"
-  const countLabel = loadState !== "ready" ? "" : showSamples ? `${products.length} sample listings` : `${total} listing${total === 1 ? "" : "s"}`
+  const showSamples = !wishlistMode && loadState === "ready" && total === 0 && !searchTerm && filterId === "all"
+  const countLabel = wishlistMode
+    ? savedState === "ready" ? `${visibleSaved.length} saved` : ""
+    : loadState !== "ready" ? "" : showSamples ? `${products.length} sample listings` : `${total} listing${total === 1 ? "" : "s"}`
 
   return (
     <main>
@@ -746,10 +833,18 @@ function Marketplace({ go }: { go: (route: Route) => void }) {
         </label>
         <div className="filters" role="group" aria-label="Filter listings">
           {MARKET_FILTERS.map((item) => (
-            <button key={item.id} type="button" className={item.id === filterId ? "active" : ""} aria-pressed={item.id === filterId} onClick={() => setFilterId(item.id)}>
+            <button key={item.id} type="button" className={item.id === filterId ? "active" : ""} aria-pressed={item.id === filterId} onClick={() => chooseFilter(item.id)}>
               {item.label}
             </button>
           ))}
+          <button
+            type="button"
+            className={`wishlist-chip${wishlistMode ? " active" : ""}`}
+            aria-pressed={wishlistMode}
+            onClick={() => chooseFilter(WISHLIST_FILTER_ID)}
+          >
+            <HeartIcon filled={wishlistMode || wishlist.count > 0} /> Wishlist{wishlist.count > 0 ? ` (${wishlist.count})` : ""}
+          </button>
           <select className="market-sort" value={sort} onChange={(event) => setSort(event.target.value as ListingSort)} aria-label="Sort listings">
             {MARKET_SORTS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
@@ -757,13 +852,55 @@ function Marketplace({ go }: { go: (route: Route) => void }) {
       </section>
       <section className="listings">
         <div className="section-title">
-          <h2>{showSamples ? "Sample listings" : "Recently listed"}</h2>
+          <h2>{wishlistMode ? "Your wishlist" : showSamples ? "Sample listings" : "Recently listed"}</h2>
           <span>{countLabel}</span>
         </div>
 
-        {loadState === "loading" && <p className="market-status" role="status">Loading listings…</p>}
+        {wishlist.error && (
+          <p className="listing-alert-error market-wishlist-error" role="alert">
+            {wishlist.error}{" "}
+            <button type="button" className="market-inline-link" onClick={wishlist.clearError}>Dismiss</button>
+          </p>
+        )}
 
-        {loadState === "error" && (
+        {wishlistMode && (
+          <>
+            {savedState === "loading" && <p className="market-status" role="status">Loading your wishlist…</p>}
+            {savedState === "error" && (
+              <div className="market-status market-status-error" role="alert">
+                <p>{savedError}</p>
+                <button type="button" className="secondary" onClick={() => setReloadKey((key) => key + 1)}>Try again</button>
+              </div>
+            )}
+            {savedState === "ready" && visibleSaved.length > 0 && (
+              <div className="product-grid">
+                {visibleSaved.map((listing) => (
+                  <ListingCard
+                    key={listing.id}
+                    listing={listing}
+                    saved
+                    onToggleSaved={(event) => toggleWishlist(listing.id, event)}
+                    onOpen={() => go(`/product/${listing.id}`)}
+                  />
+                ))}
+              </div>
+            )}
+            {savedState === "ready" && visibleSaved.length === 0 && (
+              <div className="market-empty market-wishlist-empty">
+                <p>
+                  {searchTerm
+                    ? `No saved listings match “${searchTerm}”.`
+                    : "Your wishlist is empty. Tap the ♡ on any listing to save it here."}
+                </p>
+                <button type="button" className="secondary" onClick={() => setFilterId("all")}>Browse all listings</button>
+              </div>
+            )}
+          </>
+        )}
+
+        {!wishlistMode && loadState === "loading" && <p className="market-status" role="status">Loading listings…</p>}
+
+        {!wishlistMode && loadState === "error" && (
           <div className="market-status market-status-error" role="alert">
             <p>{loadError}</p>
             <button type="button" className="secondary" onClick={() => setReloadKey((key) => key + 1)}>Try again</button>
@@ -808,27 +945,27 @@ function Marketplace({ go }: { go: (route: Route) => void }) {
           </>
         )}
 
-        {loadState === "ready" && !showSamples && listings.length > 0 && (
+        {!wishlistMode && loadState === "ready" && !showSamples && listings.length > 0 && (
           <div className="product-grid">
             {listings.map((listing) => (
               <ListingCard
                 key={listing.id}
                 listing={listing}
-                saved={Boolean(savedItems[listing.id])}
-                onToggleSaved={(event) => toggleSavedItem(listing.id, event)}
+                saved={wishlist.isSaved(listing.id)}
+                onToggleSaved={(event) => toggleWishlist(listing.id, event)}
                 onOpen={() => go(`/product/${listing.id}`)}
               />
             ))}
           </div>
         )}
 
-        {loadState === "ready" && !showSamples && listings.length === 0 && (
+        {!wishlistMode && loadState === "ready" && !showSamples && listings.length === 0 && (
           <p className="market-empty">
             {searchTerm ? `No listings match “${searchTerm}”. Try another search.` : "No listings here yet. Check back soon."}
           </p>
         )}
 
-        {loadState === "ready" && hasMore && (
+        {!wishlistMode && loadState === "ready" && hasMore && (
           <button className="secondary centered" type="button" disabled={loadingMore} onClick={() => void loadMore()}>
             {loadingMore ? "Loading…" : `Load ${Math.min(MARKET_PAGE_SIZE, total - listings.length)} More Listings`}
           </button>
@@ -931,7 +1068,7 @@ function listingToView(listing: Listing): ProductViewModel {
   if (isRent && listing.price) details.push(["Buy price", formatInr(listing.price)])
   if (listing.availability) details.push(["Availability", listing.availability])
   if (listing.exchangeFor) details.push(["Open to exchange for", listing.exchangeFor])
-  details.push(["Pickup", listing.pickupLocation || "Arrange with the seller"])
+  details.push(["Preferred pickup location", listing.pickupLocation || "Arrange with the seller"])
 
   const title = listing.title || "Untitled listing"
   return {
@@ -954,7 +1091,7 @@ function listingToView(listing: Listing): ProductViewModel {
     imageAlt: title,
     description: listing.description ? listing.description.split(/\n{2,}/) : ["The seller hasn't added a description yet."],
     details,
-    primaryActionLabel: isRent ? "Request to Rent · Campus Pickup" : "Buy Now · Hold for Campus Pickup",
+    primaryActionLabel: isRent ? "Request to Rent" : "Buy Now",
     locationLine: `${listing.pickupLocation ? `Pickup: ${listing.pickupLocation}` : "Campus pickup"} · Verified student seller`,
     seller: {
       name: seller.name,
@@ -963,7 +1100,7 @@ function listingToView(listing: Listing): ProductViewModel {
       mobileSubtitle: `Verified student${seller.course ? ` · ${seller.course}` : ""}`,
       rating: null,
     },
-    pickupHeading: "Pickup",
+    pickupHeading: "Preferred pickup location",
     pickupNote: listing.pickupInstructions || pickupFallback,
     pickupSpots: listing.pickupLocation ? [listing.pickupLocation] : [],
     mobilePickupTitle: listing.pickupLocation || "Campus pickup",
@@ -1014,23 +1151,39 @@ function ProductView({ go, navigate, view }: { go: (route: Route) => void; navig
   const galleryImages = view.images
   const [activeImageIndex, setActiveImageIndex] = useState(0)
   const [expandedDescription, setExpandedDescription] = useState(false)
-  const [saved, setSaved] = useState(false)
+  const wishlist = useWishlist()
+  const [demoSaved, setDemoSaved] = useState(false)
+  // Real listings are saved to the student's wishlist; the sample listing only toggles locally.
+  const canWishlist = Boolean(view.listingId) && !view.isDemo && !view.isOwner
+  const saved = canWishlist && view.listingId ? wishlist.isSaved(view.listingId) : demoSaved
+  const toggleSaved = () => {
+    if (!canWishlist || !view.listingId) {
+      setDemoSaved((previous) => !previous)
+      return
+    }
+    void wishlist.toggle(view.listingId).then((result) => {
+      if (result === "sign-in") go("/sign-in")
+    })
+  }
   const sellerFirstName = view.seller.name.split(" ")[0] || "seller"
 
-  // Messaging is not connected to the backend yet: the demo opens its sample conversation.
-  const openSellerMessages = () => {
-    if (!view.isDemo) {
+  const [offerOpen, setOfferOpen] = useState(false)
+
+  // Opens (or creates) the real conversation with this listing's seller. The sample listing has no seller.
+  // An optional draft (buy request or offer) is pre-filled in the reply box for the buyer to send.
+  const openSellerMessages = (draft?: string) => {
+    if (view.isDemo || !view.listingId) {
       go("/messages")
       return
     }
-    const conversationId = "alex-rivera"
-    const initialMessage = encodeURIComponent("Hi, is this item still available?")
-    const nextUrl = new URL(window.location.href)
-    nextUrl.pathname = "/messages"
-    nextUrl.search = `?conversation=${conversationId}&initial=${initialMessage}`
-    window.history.pushState({}, "", nextUrl)
-    window.dispatchEvent(new PopStateEvent("popstate"))
+    const params = new URLSearchParams({ listing: view.listingId })
+    if (draft) params.set("draft", draft)
+    navigate(`/messages?${params.toString()}`)
   }
+
+  const buyDraft = view.typeLabel.toLowerCase().includes("rent")
+    ? `Hi! I'd like to rent "${view.title}" (${view.displayPrice}). When is it available for pickup?`
+    : `Hi! I'd like to buy "${view.title}" for ${view.displayPrice}. When can we meet for pickup?`
 
   const editListing = () => {
     if (view.listingId) navigate(`/seller-hub?edit=${encodeURIComponent(view.listingId)}`)
@@ -1064,7 +1217,6 @@ function ProductView({ go, navigate, view }: { go: (route: Route) => void; navig
 
   const mobileDescription = view.description.join(" ")
   const mainImage = galleryImages[activeImageIndex] ?? galleryImages[0]
-  const thumbs = galleryImages.map((src, index) => ({ src, index })).filter((thumb) => thumb.index !== activeImageIndex)
 
   if (isMobile) {
     return (
@@ -1144,7 +1296,7 @@ function ProductView({ go, navigate, view }: { go: (route: Route) => void; navig
             <div className="mobile-message-box">
               <p>Hi, is this item still available?</p>
             </div>
-            <button type="button" className="mobile-primary-button" onClick={openSellerMessages}>Send</button>
+            <button type="button" className="mobile-primary-button" onClick={() => openSellerMessages()}>Send</button>
           </section>
         )}
 
@@ -1162,13 +1314,13 @@ function ProductView({ go, navigate, view }: { go: (route: Route) => void; navig
             </>
           ) : (
             <>
-              <button type="button" className="mobile-action-button" onClick={() => setSaved((previous) => !previous)}>
+              <button type="button" className="mobile-action-button" onClick={toggleSaved} aria-pressed={saved}>
                 <span className={saved ? "mobile-action-icon saved" : "mobile-action-icon"} aria-hidden="true">♡</span>
-                <small>Save</small>
+                <small>{saved ? "Saved" : "Save"}</small>
               </button>
-              <button type="button" className="mobile-action-button" onClick={openSellerMessages}>
-                <span className="mobile-action-icon" aria-hidden="true">✎</span>
-                <small>Message</small>
+              <button type="button" className="mobile-action-button" onClick={() => setOfferOpen((open) => !open)} aria-expanded={offerOpen}>
+                <span className="mobile-action-icon" aria-hidden="true">₹</span>
+                <small>Offer</small>
               </button>
             </>
           )}
@@ -1177,6 +1329,12 @@ function ProductView({ go, navigate, view }: { go: (route: Route) => void; navig
             <small>Share</small>
           </button>
         </section>
+
+        {!view.isOwner && offerOpen && (
+          <section className="mobile-section-block">
+            <OfferForm view={view} onSend={(draft) => openSellerMessages(draft)} onCancel={() => setOfferOpen(false)} />
+          </section>
+        )}
 
         <section className="mobile-section-block">
           <div className="mobile-section-header">
@@ -1257,90 +1415,169 @@ function ProductView({ go, navigate, view }: { go: (route: Route) => void; navig
           </div>
           {view.isOwner
             ? <button type="button" className="mobile-primary-button" onClick={editListing}>Edit listing</button>
-            : <button type="button" className="mobile-primary-button" onClick={openSellerMessages}>Message Seller</button>}
+            : <button type="button" className="mobile-primary-button" onClick={() => openSellerMessages()}>Message Seller</button>}
         </div>
       </main>
     )
   }
 
   return (
-    <main className="page-shell">
-      <div className="breadcrumb">
-        <button onClick={() => go("/marketplace")}>{view.marketplaceLabel}</button>{" "}
-        / {view.category} / <strong>{view.shortTitle}</strong>
-        <span className="verified push">
-          {view.statusLine}
-        </span>
-      </div>
-      <div className="product-layout">
-        <section>
-          <div className="gallery">
+    <main className="page-shell pdp">
+      <nav className="breadcrumb pdp-breadcrumb" aria-label="Breadcrumb">
+        <button onClick={() => go("/marketplace")}>Marketplace</button>
+        <span aria-hidden="true">/</span>
+        <span>{view.category}</span>
+        <span aria-hidden="true">/</span>
+        <strong>{view.shortTitle}</strong>
+      </nav>
+      <div className="pdp-layout">
+        <section className="pdp-main">
+          <div className="pdp-gallery">
             {mainImage ? <img src={mainImage} alt={view.imageAlt} /> : <div className="product-image-empty">No photos yet</div>}
+            {galleryImages.length > 1 && <span className="pdp-photo-count">{activeImageIndex + 1} / {galleryImages.length}</span>}
           </div>
-          {thumbs.length > 0 && (
-            <div className="thumbs">
-              {thumbs.map((thumb) => (
-                <img key={thumb.src} src={thumb.src} alt="" onClick={() => setActiveImageIndex(thumb.index)} />
+          {galleryImages.length > 1 && (
+            <div className="pdp-thumbs" aria-label="Photos">
+              {galleryImages.map((src, index) => (
+                <button
+                  key={src}
+                  type="button"
+                  className={index === activeImageIndex ? "active" : undefined}
+                  onClick={() => setActiveImageIndex(index)}
+                  aria-label={`Show photo ${index + 1}`}
+                  aria-pressed={index === activeImageIndex}
+                >
+                  <img src={src} alt="" />
+                </button>
               ))}
             </div>
           )}
-          <article className="panel">
-            <h2>Item Description &amp; Usage</h2>
-            {view.description.map((paragraph, index) => (
-              <p key={index}>{paragraph}</p>
-            ))}
+          <article className="pdp-card">
+            <h2>Description</h2>
+            <div className="pdp-description">
+              {view.description.map((paragraph, index) => (
+                <p key={index}>{paragraph}</p>
+              ))}
+            </div>
+          </article>
+          <article className="pdp-card">
+            <h2>Item details</h2>
+            <dl className="pdp-details">
+              {view.details.map(([label, value]) => (
+                <div key={label}>
+                  <dt>{label}</dt>
+                  <dd>{value}</dd>
+                </div>
+              ))}
+            </dl>
           </article>
         </section>
-        <aside>
-          <div className="buy-box">
-            <h1>
+
+        <aside className="pdp-sidebar">
+          <div className="pdp-card pdp-summary">
+            <div className="pdp-badges">
+              <span className="pdp-badge">{view.typeLabel}</span>
+              {view.condition && <span className="pdp-badge pdp-badge-muted">{view.condition}</span>}
+            </div>
+            <h1>{view.title}</h1>
+            <p className="pdp-price">
               {view.priceAmount} <small>{view.priceUnit}</small>
-            </h1>
-            {view.priceNote && <p className="verified">{view.priceNote}</p>}
+            </p>
+            <p className="pdp-status">{view.statusLine.replace(/^●\s*/, "")}</p>
             {view.isOwner ? (
-              <>
+              <div className="pdp-actions">
                 <button className="primary" onClick={editListing}>Edit listing</button>
-                <div className="button-row">
-                  <button className="secondary" onClick={() => go("/seller-hub")}>Open Seller Hub</button>
-                </div>
-              </>
+                <button className="secondary" onClick={() => go("/seller-hub")}>Open Seller Hub</button>
+              </div>
             ) : (
               <>
-                <button className="primary">
-                  {view.primaryActionLabel}
-                </button>
-                <div className="button-row">
-                  <button className="secondary">Make Offer</button>
+                <div className="pdp-actions">
+                  <button className="primary" onClick={() => openSellerMessages(buyDraft)}>{view.primaryActionLabel}</button>
+                  <button className="secondary" onClick={() => setOfferOpen((open) => !open)} aria-expanded={offerOpen}>
+                    {offerOpen ? "Close offer" : "Make Offer"}
+                  </button>
                 </div>
+                {offerOpen && <OfferForm view={view} onSend={(draft) => openSellerMessages(draft)} onCancel={() => setOfferOpen(false)} />}
+                <button type="button" className={`pdp-save-button${saved ? " is-saved" : ""}`} onClick={toggleSaved} aria-pressed={saved}>
+                  <HeartIcon filled={saved} /> {saved ? "Saved to wishlist" : "Save to wishlist"}
+                </button>
+                {wishlist.error && <p className="pdp-offer-error" role="alert">{wishlist.error}</p>}
               </>
             )}
           </div>
-          <div className="seller panel">
-            <Avatar src={view.seller.avatarUrl} name={view.seller.name} />
-            <div>
-              <strong>{view.seller.name}</strong>
-              <p>{view.seller.subtitle}</p>
+
+          <div className="pdp-card pdp-seller">
+            <div className="pdp-seller-row">
+              <Avatar src={view.seller.avatarUrl} name={view.seller.name} />
+              <div>
+                <span className="pdp-label">Seller</span>
+                <strong>{view.seller.name}</strong>
+                <p>{view.seller.subtitle}</p>
+              </div>
+              {view.seller.rating && <b className="pdp-rating">{view.seller.rating}</b>}
             </div>
-            {view.seller.rating ? <b>{view.seller.rating}</b> : <span />}
             {!view.isOwner && (
-              <button className="dark" onClick={() => go("/messages")}>
+              <button className="pdp-message-button" onClick={() => openSellerMessages()}>
                 Message {sellerFirstName}
               </button>
             )}
           </div>
-          <div className="panel">
-            <h3>{view.pickupHeading}</h3>
+
+          <div className="pdp-card pdp-pickup">
+            <span className="pdp-label">{view.pickupHeading}</span>
+            {view.pickupSpots.length > 0 ? (
+              view.pickupSpots.map((spot) => <strong key={spot}>{spot}</strong>)
+            ) : (
+              <strong>Arrange with the seller</strong>
+            )}
             <p>{view.pickupNote}</p>
-            {view.pickupSpots.map((spot, index) => (
-              <Fragment key={spot}>
-                {index > 0 && <br />}
-                <strong>{spot}</strong>
-              </Fragment>
-            ))}
           </div>
+
+          <p className="pdp-safety">Meet in a busy spot on campus and check the item before you pay.</p>
         </aside>
       </div>
     </main>
+  )
+}
+
+/** Make Offer: pick a price, then continue in chat with the offer already written for the seller. */
+function OfferForm({ view, onSend, onCancel }: { view: ProductViewModel; onSend: (draft: string) => void; onCancel: () => void }) {
+  const [amount, setAmount] = useState("")
+  const [error, setError] = useState("")
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault()
+    const value = Number(amount)
+    if (!amount.trim() || !Number.isFinite(value) || value <= 0) return setError("Enter the price you'd like to offer.")
+    if (!Number.isInteger(value)) return setError("Use a whole number of rupees.")
+    if (value > 10_000_000) return setError("That offer is too high.")
+    onSend(`Hi! I'd like to offer ${formatInr(value)} for "${view.title}" (listed at ${view.displayPrice}). Would that work for you?`)
+  }
+
+  return (
+    <form className="pdp-offer" onSubmit={submit} noValidate>
+      <label htmlFor="offer-amount">Your offer</label>
+      <div className="pdp-offer-input">
+        <span aria-hidden="true">₹</span>
+        <input
+          id="offer-amount"
+          type="number"
+          inputMode="numeric"
+          min={1}
+          step={1}
+          placeholder={view.priceAmount.replace(/[^\d]/g, "") || "0"}
+          value={amount}
+          onChange={(event) => { setAmount(event.target.value); setError("") }}
+          autoFocus
+        />
+      </div>
+      <p className="pdp-offer-hint">Asking {view.displayPrice}. Sending opens a chat with the seller, where you can agree on the final price.</p>
+      {error && <p className="pdp-offer-error" role="alert">{error}</p>}
+      <div className="pdp-offer-buttons">
+        <button type="button" className="secondary" onClick={onCancel}>Cancel</button>
+        <button type="submit" className="primary">Send offer in chat</button>
+      </div>
+    </form>
   )
 }
 
@@ -1972,519 +2209,6 @@ function Sell({ go, listingId, onSaved }: {
   )
 }
 
-function useIsMobile() {
-  const [isMobile, setIsMobile] = useState(() => {
-    if (typeof window === "undefined") return false
-    return window.innerWidth <= 760
-  })
-
-  useEffect(() => {
-    if (typeof window === "undefined") return
-
-    const mediaQuery = window.matchMedia("(max-width: 760px)")
-    const update = () => setIsMobile(mediaQuery.matches)
-
-    update()
-
-    if (typeof mediaQuery.addEventListener === "function") {
-      mediaQuery.addEventListener("change", update)
-      return () => mediaQuery.removeEventListener("change", update)
-    }
-
-    mediaQuery.addListener(update)
-    return () => mediaQuery.removeListener(update)
-  }, [])
-
-  return isMobile
-}
-
-function Messages({ go }: { go: (route: Route) => void }) {
-  type MessageEntry = {
-    id: string
-    text: string
-    isOutgoing: boolean
-    time: string
-    createdAt: number
-  }
-
-  type ConversationItem = {
-    id: string
-    name: string
-    avatar: string
-    lastMessage: string
-    time: string
-    unread: number
-    online: boolean
-    product: string
-    productImage: string
-    productMeta: string
-    lastActivity: number
-    messages: MessageEntry[]
-  }
-
-  const seedConversationData = (): ConversationItem[] => {
-    const now = Date.now()
-    return [
-      {
-        id: "alex-rivera",
-        name: "Alex Rivera",
-        avatar: "/assets/bda06.png",
-        lastMessage: "Would you take $125 if I meet at Tresidder at 4pm?",
-        time: "4:30 PM",
-        unread: 2,
-        online: true,
-        product: "Sony WH-1000XM4 Wireless Headphones",
-        productImage: "/assets/571b1.png",
-        productMeta: "Asking $140 · Wilbur Hall Dorms",
-        lastActivity: now - 1000 * 60 * 18,
-        messages: [
-          { id: "alex-1", text: "Hey Alex! Yes, bought them last Fall and only used them in the library.", isOutgoing: false, time: "Today, 4:15 PM", createdAt: now - 1000 * 60 * 25 },
-          { id: "alex-2", text: "Campus Offer Received: $125.00 · Tresidder Student Union · Today, 4:30 PM", isOutgoing: true, time: "Today, 4:30 PM", createdAt: now - 1000 * 60 * 18 },
-        ],
-      },
-      {
-        id: "chloe-chen",
-        name: "Chloe Chen",
-        avatar: "/assets/44aaf.png",
-        lastMessage: "I can do same-day pickup near the library.",
-        time: "Yesterday",
-        unread: 1,
-        online: true,
-        product: "Fujifilm X-T30 II + 18–55mm",
-        productImage: "/assets/9d09f.png",
-        productMeta: "Daily rental · 2 days availability",
-        lastActivity: now - 1000 * 60 * 60 * 23,
-        messages: [
-          { id: "chloe-1", text: "I can do same-day pickup near the library.", isOutgoing: false, time: "Yesterday, 8:12 PM", createdAt: now - 1000 * 60 * 60 * 23 },
-          { id: "chloe-2", text: "Perfect, I’ll meet you after class.", isOutgoing: true, time: "Yesterday, 8:28 PM", createdAt: now - 1000 * 60 * 60 * 22 },
-        ],
-      },
-      {
-        id: "marcus-vance",
-        name: "Marcus Vance",
-        avatar: "/assets/3f5d9.png",
-        lastMessage: "The chair is still available. Want photos?",
-        time: "Mon",
-        unread: 0,
-        online: false,
-        product: "Herman Miller Sayl Task Chair",
-        productImage: "/assets/d07b8.png",
-        productMeta: "Asking $220 · East Residence Hall",
-        lastActivity: now - 1000 * 60 * 60 * 50,
-        messages: [
-          { id: "marcus-1", text: "The chair is still available. Want photos?", isOutgoing: false, time: "Mon, 11:42 AM", createdAt: now - 1000 * 60 * 60 * 50 },
-          { id: "marcus-2", text: "Yes, please send a quick set from the front angle.", isOutgoing: true, time: "Mon, 12:03 PM", createdAt: now - 1000 * 60 * 60 * 49 },
-        ],
-      },
-      {
-        id: "priya-nair",
-        name: "Priya Nair",
-        avatar: "/assets/3a602.png",
-        lastMessage: "I can drop it off near the common room.",
-        time: "Sun",
-        unread: 0,
-        online: true,
-        product: "Patagonia Synchilla Snap-T",
-        productImage: "/assets/025ac.png",
-        productMeta: "Trade or sale · New condition",
-        lastActivity: now - 1000 * 60 * 60 * 74,
-        messages: [
-          { id: "priya-1", text: "I can drop it off near the common room.", isOutgoing: false, time: "Sun, 9:04 AM", createdAt: now - 1000 * 60 * 60 * 74 },
-          { id: "priya-2", text: "That works. Can we keep it to a quick meetup after 6 PM?", isOutgoing: true, time: "Sun, 9:11 AM", createdAt: now - 1000 * 60 * 60 * 73 },
-        ],
-      },
-    ]
-  }
-
-  const quickReplies = [
-    "I'm interested in this item.",
-    "Is this item still available?",
-    "What condition is this item in?",
-    "Do you deliver?",
-  ]
-
-  const isMobile = useIsMobile()
-  const [conversations, setConversations] = useState<ConversationItem[]>(seedConversationData)
-  const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null)
-  const [search, setSearch] = useState("")
-  const [drafts, setDrafts] = useState<Record<string, string>>({
-    "alex-rivera": "",
-    "chloe-chen": "",
-    "marcus-vance": "",
-    "priya-nair": "",
-  })
-
-  useEffect(() => {
-    if (typeof window === "undefined") return
-
-    const params = new URLSearchParams(window.location.search)
-    const conversationId = params.get("conversation")
-    const initialMessage = params.get("initial")
-
-    if (conversationId) {
-      setSelectedConversationId(conversationId)
-      if (initialMessage) {
-        setDrafts((previous) => ({
-          ...previous,
-          [conversationId]: decodeURIComponent(initialMessage),
-        }))
-      }
-    } else if (!isMobile) {
-      setSelectedConversationId("alex-rivera")
-    } else {
-      setSelectedConversationId(null)
-    }
-  }, [isMobile])
-
-  useEffect(() => {
-    if (!isMobile || typeof window === "undefined") return
-
-    const handlePopState = () => {
-      const params = new URLSearchParams(window.location.search)
-      const nextConversation = params.get("conversation")
-      setSelectedConversationId(nextConversation)
-    }
-
-    window.addEventListener("popstate", handlePopState)
-    return () => window.removeEventListener("popstate", handlePopState)
-  }, [isMobile])
-
-  const filteredConversations = useMemo(() => {
-    const term = search.trim().toLowerCase()
-    const next = conversations.filter((conversation) => {
-      if (!term) return true
-      return (
-        conversation.name.toLowerCase().includes(term) ||
-        conversation.product.toLowerCase().includes(term) ||
-        conversation.lastMessage.toLowerCase().includes(term)
-      )
-    })
-
-    return next.sort((left, right) => right.lastActivity - left.lastActivity)
-  }, [conversations, search])
-
-  const sortedConversations = useMemo(
-    () => [...conversations].sort((left, right) => right.lastActivity - left.lastActivity),
-    [conversations],
-  )
-
-  const activeConversation =
-    selectedConversationId !== null
-      ? (sortedConversations.find((conversation) => conversation.id === selectedConversationId) ?? sortedConversations[0])
-      : null
-
-  const openConversation = (conversationId: string) => {
-    setSelectedConversationId(conversationId)
-
-    if (typeof window === "undefined" || !isMobile) return
-
-    const nextUrl = new URL(window.location.href)
-    nextUrl.searchParams.set("conversation", conversationId)
-    window.history.pushState({}, "", nextUrl)
-  }
-
-  const goBackToList = () => {
-    setSelectedConversationId(null)
-
-    if (typeof window === "undefined" || !isMobile) return
-
-    const nextUrl = new URL(window.location.href)
-    nextUrl.searchParams.delete("conversation")
-    window.history.pushState({}, "", nextUrl)
-  }
-
-  const updateConversationPreview = (conversationId: string, nextText: string, isOutgoing: boolean) => {
-    const timestamp = Date.now()
-
-    setConversations((previous) =>
-      [...previous]
-        .map((conversation) => {
-          if (conversation.id !== conversationId) return conversation
-
-          const nextMessages = [...conversation.messages, {
-            id: `message-${timestamp}-${conversation.id}`,
-            text: nextText,
-            isOutgoing,
-            time: new Date(timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
-            createdAt: timestamp,
-          }]
-
-          return {
-            ...conversation,
-            messages: nextMessages,
-            lastMessage: nextText,
-            time: new Date(timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
-            unread: isOutgoing ? 0 : conversation.unread,
-            lastActivity: timestamp,
-          }
-        })
-        .sort((left, right) => right.lastActivity - left.lastActivity),
-    )
-  }
-
-  const send = (event?: FormEvent, conversationId = activeConversation?.id) => {
-    if (!conversationId) return
-    const nextText = (drafts[conversationId] ?? "").trim()
-    if (event) event.preventDefault()
-    if (!nextText) return
-
-    updateConversationPreview(conversationId, nextText, true)
-    setDrafts((previous) => ({ ...previous, [conversationId]: "" }))
-  }
-
-  const showQuickReplies = activeConversation ? activeConversation.messages.length <= 2 : false
-
-  const renderDesktopMessages = () => (
-    <div className="messages-layout">
-      <aside className="conversations">
-        <h2>Conversations</h2>
-        <input placeholder="Search conversations, buyers, items..." />
-        {sortedConversations.map((conversation) => (
-          <div
-            className={conversation.id === (activeConversation?.id ?? "alex-rivera") ? "conversation active" : "conversation"}
-            key={conversation.id}
-            onClick={() => setSelectedConversationId(conversation.id)}
-          >
-            <img src={conversation.avatar} alt="" />
-            <div>
-              <strong>{conversation.name}</strong>
-              <p>{conversation.lastMessage}</p>
-            </div>
-          </div>
-        ))}
-      </aside>
-      <section className="chat">
-        {(activeConversation ?? sortedConversations[0]) && (
-          <>
-            <div className="chat-head">
-              <img src={(activeConversation ?? sortedConversations[0]).avatar} alt="" />
-              <div>
-                <h2>{(activeConversation ?? sortedConversations[0]).name}</h2>
-                <p className="verified">Verified Student · Responds within 10m</p>
-              </div>
-            </div>
-            <div className="item-strip">
-              <img src={(activeConversation ?? sortedConversations[0]).productImage} alt="" />
-              <div>
-                <strong>{(activeConversation ?? sortedConversations[0]).product}</strong>
-                <p>{(activeConversation ?? sortedConversations[0]).productMeta}</p>
-              </div>
-              <button onClick={() => go("/product/sony-wh-1000xm4")}>View Item</button>
-            </div>
-            <div className="chat-body">
-              {(activeConversation ?? sortedConversations[0]).messages.map((message, index) => (
-                <div
-                  className={message.isOutgoing ? "bubble" : "offer-message"}
-                  key={`${message.id}-${index}`}
-                >
-                  {message.text}
-                </div>
-              ))}
-              {showQuickReplies && (
-                <div className="message-suggestions" aria-label="Quick reply suggestions">
-                  {quickReplies.map((reply) => (
-                    <button
-                      key={reply}
-                      type="button"
-                      className="message-suggestion"
-                      onClick={() => {
-                        const conversationId = (activeConversation ?? sortedConversations[0]).id
-                        updateConversationPreview(conversationId, reply, true)
-                      }}
-                    >
-                      {reply}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-            <form
-              className="reply"
-              onSubmit={(event) => send(event, (activeConversation ?? sortedConversations[0]).id)}
-            >
-              <input
-                value={drafts[(activeConversation ?? sortedConversations[0]).id] ?? ""}
-                onChange={(event) =>
-                  setDrafts((previous) => ({
-                    ...previous,
-                    [(activeConversation ?? sortedConversations[0]).id]: event.target.value,
-                  }))
-                }
-                placeholder="Reply to Alex or negotiate terms..."
-              />
-              <button className="dark" type="submit">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-                Send
-              </button>
-            </form>
-          </>
-        )}
-      </section>
-    </div>
-  )
-
-  const renderMobileList = () => (
-    <div className="mobile-messages-shell">
-      <header className="mobile-messages-header">
-        <div>
-          <h1>Messages</h1>
-        </div>
-        <button type="button" className="mobile-header-icon" aria-label="Search conversations">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <circle cx="11" cy="11" r="6" />
-            <path d="M16 16l5 5" />
-          </svg>
-        </button>
-      </header>
-
-      <div className="mobile-conversation-search">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <circle cx="11" cy="11" r="6" />
-          <path d="M16 16l5 5" />
-        </svg>
-        <input
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-          placeholder="Search messages"
-        />
-      </div>
-
-      <div className="mobile-conversation-list">
-        {filteredConversations.length ? (
-          filteredConversations.map((conversation) => (
-            <button
-              key={conversation.id}
-              type="button"
-              className={conversation.id === selectedConversationId ? "mobile-conversation-item active" : "mobile-conversation-item"}
-              onClick={() => openConversation(conversation.id)}
-            >
-              <div className="mobile-contact-wrap">
-                <div className="mobile-avatar-wrapper">
-                  <img src={conversation.avatar} alt="" />
-                  {conversation.online && <span className="mobile-online-dot" aria-label="Online" />}
-                </div>
-                <div className="mobile-conversation-copy">
-                  <div className="mobile-conversation-topline">
-                    <strong>{conversation.name}</strong>
-                    <span>{conversation.time}</span>
-                  </div>
-                  <div className="mobile-conversation-meta">
-                    <p>{conversation.lastMessage}</p>
-                    {conversation.unread > 0 && <span className="mobile-unread-badge">{conversation.unread}</span>}
-                  </div>
-                </div>
-              </div>
-            </button>
-          ))
-        ) : (
-          <div className="mobile-empty-state">
-            <h3>No conversations</h3>
-            <p>Messages will appear here once a student reaches out.</p>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-
-  const renderMobileChat = () => {
-    if (!activeConversation) return null
-
-    return (
-      <div className="mobile-chat-shell">
-        <header className="mobile-chat-header">
-          <button type="button" className="mobile-back-button" onClick={goBackToList} aria-label="Back to messages">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M15 18l-6-6 6-6" />
-            </svg>
-          </button>
-          <img src={activeConversation.avatar} alt="" />
-          <div className="mobile-chat-header-copy">
-            <strong>{activeConversation.name}</strong>
-            <span>{activeConversation.online ? "Online" : "Last seen recently"}</span>
-          </div>
-          <button type="button" className="mobile-chat-cta" onClick={() => go("/product/sony-wh-1000xm4")}>
-            Item
-          </button>
-        </header>
-
-        <div className="mobile-product-strip">
-          <img src={activeConversation.productImage} alt="" />
-          <div>
-            <strong>{activeConversation.product}</strong>
-            <span>{activeConversation.productMeta}</span>
-          </div>
-        </div>
-
-        <div className="chat-body mobile-chat-body">
-          <div className="mobile-chat-date">Today</div>
-          {activeConversation.messages.map((message, index) => (
-            <div
-              key={`${message.id}-${index}`}
-              className={message.isOutgoing ? "mobile-message-row outgoing" : "mobile-message-row incoming"}
-            >
-              <div className={message.isOutgoing ? "mobile-message-bubble outgoing" : "mobile-message-bubble incoming"}>
-                <span>{message.text}</span>
-                <small>{message.time}</small>
-              </div>
-            </div>
-          ))}
-          {showQuickReplies && (
-            <div className="message-suggestions mobile-message-suggestions" aria-label="Quick reply suggestions">
-              {quickReplies.map((reply) => (
-                <button
-                  key={reply}
-                  type="button"
-                  className="message-suggestion"
-                  onClick={() => {
-                    updateConversationPreview(activeConversation.id, reply, true)
-                  }}
-                >
-                  {reply}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <form className="reply mobile-reply" onSubmit={(event) => send(event, activeConversation.id)}>
-          <button type="button" className="mobile-attach-button" aria-label="Attach file">＋</button>
-          <input
-            value={drafts[activeConversation.id] ?? ""}
-            onChange={(event) =>
-              setDrafts((previous) => ({
-                ...previous,
-                [activeConversation.id]: event.target.value,
-              }))
-            }
-            placeholder="Type a message"
-          />
-          <button className="dark" type="submit">Send</button>
-        </form>
-      </div>
-    )
-  }
-
-  return (
-    <main className="page-shell">
-      <div className="breadcrumb">
-        <button onClick={() => go("/marketplace")}>Campus Direct</button> /{" "}
-        <strong>Offers &amp; Messages</strong>
-        <span className="verified push">
-          ● Designated Campus Safe-Exchange Hub: Tresidder &amp; Old Union
-        </span>
-      </div>
-
-      {isMobile ? (
-        <div className="mobile-messages-container">
-          {selectedConversationId ? renderMobileChat() : renderMobileList()}
-        </div>
-      ) : (
-        renderDesktopMessages()
-      )}
-    </main>
-  )
-}
-
 type SellerHubTab =
   | "Overview"
   | "My Listings"
@@ -2527,7 +2251,6 @@ const SELLER_LISTING_FILTERS: Array<{ value: "All" | ListingStatus; label: strin
   { value: "pending", label: "Pending" },
   { value: "sold", label: "Sold" },
   { value: "rented", label: "Rented" },
-  { value: "exchanged", label: "Exchanged" },
   { value: "archived", label: "Archived" },
 ]
 
@@ -2627,7 +2350,7 @@ function SellerHub({ go }: { go: (route: Route) => void }) {
   const activeListingCount = listings.filter((listing) => listing.status === "active").length
   const soldItemCount = listings.filter((listing) => listing.status === "sold").length
   const pendingOfferCount = sellerOffers.filter((offer) => offer.status === "Pending").length
-  const unreadBuyerMessages = 8
+  const { unreadTotal: unreadBuyerMessages } = useRealtime()
 
   const changeListingStatus = async (listingId: string, nextStatus: Exclude<ListingStatus, "draft">) => {
     setBusyListingId(listingId)
@@ -2767,9 +2490,15 @@ function SellerHub({ go }: { go: (route: Route) => void }) {
               key={filter.value}
               type="button"
               className={listingFilter === filter.value ? "active" : ""}
+              aria-pressed={listingFilter === filter.value}
               onClick={() => setListingFilter(filter.value)}
             >
               {filter.label}
+              {listingsState === "ready" && (
+                <span className="sh-filter-count">
+                  {filter.value === "All" ? listings.length : listings.filter((listing) => listing.status === filter.value).length}
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -2777,7 +2506,7 @@ function SellerHub({ go }: { go: (route: Route) => void }) {
 
       {listingActionError && <p className="listing-alert-error" role="alert">{listingActionError}</p>}
 
-      <div className="seller-listing-grid">
+      <div className="sh-grid">
         {listingsState === "loading" && <div className="seller-empty-block seller-span-full" role="status">Loading your listings…</div>}
 
         {listingsState === "error" && (
@@ -2792,40 +2521,40 @@ function SellerHub({ go }: { go: (route: Route) => void }) {
             const busy = busyListingId === listing.id
             const cover = primaryImageUrl(listing)
             const canRelist = Boolean(listing.publishedAt) && listing.status !== "active" && listing.status !== "draft"
+            const isRental = listing.listingType === "for_rent"
+            // Rentals can be marked rented; sales (or rentals that also have a buy price) can be marked sold.
+            const canMarkSold = listing.status === "active" && (!isRental || Boolean(listing.price))
+            const canMarkRented = listing.status === "active" && isRental
+            const canArchive = listing.status !== "archived" && listing.status !== "draft"
             return (
-              <article key={listing.id} className="seller-listing-card">
-                {cover ? <img src={cover} alt={listing.title} /> : <div className="seller-listing-noimage">No photo</div>}
-                <div className="seller-listing-copy">
-                  <div className="seller-listing-topline">
-                    <span className="seller-status-badge">{statusLabel(listing.status)}</span>
-                    <span className="seller-listing-type">{listingTypeLabel(listing)}</span>
+              <article key={listing.id} className="sh-card">
+                <div className="sh-card-image">
+                  {cover ? <img src={cover} alt="" loading="lazy" /> : <div className="sh-card-noimage">No photo</div>}
+                  <span className={`sh-status sh-status-${listing.status}`}>{statusLabel(listing.status)}</span>
+                </div>
+                <div className="sh-card-body">
+                  <div className="sh-card-meta">
+                    <span>{listingTypeLabel(listing)}</span>
+                    {listing.status !== "draft" && <span>{listing.views} view{listing.views === 1 ? "" : "s"}</span>}
                   </div>
                   <h3>{listing.title || "Untitled draft"}</h3>
-                  <div className="seller-listing-meta">
-                    <strong>{formatListingPrice(listing)}</strong>
-                    <span>{listing.views} views</span>
-                  </div>
+                  <strong className="sh-card-price">
+                    {listing.price !== null || listing.rentalPrice !== null ? formatListingPrice(listing) : "No price yet"}
+                  </strong>
                   <p>Updated {new Date(listing.updatedAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</p>
-                  <div className="seller-listing-actions">
-                    <button className="secondary" disabled={busy} onClick={() => openEditor(listing.id)}>Edit</button>
-                    {listing.status !== "draft" && (
-                      <button className="secondary" disabled={busy} onClick={() => go(`/product/${listing.id}`)}>View</button>
-                    )}
-                    {listing.status === "active" && (
-                      <>
-                        <button className="secondary" disabled={busy} onClick={() => void changeListingStatus(listing.id, "sold")}>Mark sold</button>
-                        <button className="secondary" disabled={busy} onClick={() => void changeListingStatus(listing.id, "rented")}>Mark rented</button>
-                        <button className="secondary" disabled={busy} onClick={() => void changeListingStatus(listing.id, "exchanged")}>Mark exchanged</button>
-                      </>
-                    )}
-                    {canRelist && (
-                      <button className="secondary" disabled={busy} onClick={() => void changeListingStatus(listing.id, "active")}>Relist</button>
-                    )}
-                    {listing.status !== "archived" && listing.status !== "draft" && (
-                      <button className="ghost-button" disabled={busy} onClick={() => void changeListingStatus(listing.id, "archived")}>Archive</button>
-                    )}
-                    <button className="ghost-button" disabled={busy} onClick={() => void removeListing(listing)}>Delete</button>
-                  </div>
+                </div>
+                <div className="sh-card-actions">
+                  <button className="primary" disabled={busy} onClick={() => openEditor(listing.id)}>Edit</button>
+                  {listing.status !== "draft"
+                    ? <button className="secondary" disabled={busy} onClick={() => go(`/product/${listing.id}`)}>View</button>
+                    : <span />}
+                </div>
+                <div className="sh-card-status-actions">
+                  {canMarkSold && <button type="button" disabled={busy} onClick={() => void changeListingStatus(listing.id, "sold")}>Mark sold</button>}
+                  {canMarkRented && <button type="button" disabled={busy} onClick={() => void changeListingStatus(listing.id, "rented")}>Mark rented</button>}
+                  {canRelist && <button type="button" disabled={busy} onClick={() => void changeListingStatus(listing.id, "active")}>Relist</button>}
+                  {canArchive && <button type="button" disabled={busy} onClick={() => void changeListingStatus(listing.id, "archived")}>Archive</button>}
+                  <button type="button" className="sh-danger" disabled={busy} onClick={() => void removeListing(listing)}>Delete</button>
                 </div>
               </article>
             )
@@ -2941,7 +2670,7 @@ function SellerHub({ go }: { go: (route: Route) => void }) {
     </div>
   )
 
-  const renderSavedMessages = () => <Messages go={go} />
+  const renderSavedMessages = () => <Messages go={go} embedded />
 
   const renderAssistant = () => (
     <div className="seller-dashboard-section">
@@ -3179,211 +2908,11 @@ function SellerHub({ go }: { go: (route: Route) => void }) {
   )
 }
 
-const profileListings = [
-  {
-    name: "Sony WH-1000XM4 Headphones",
-    price: "$140",
-    status: "Active",
-    image: "/assets/571b1.png",
-  },
-  {
-    name: "Herman Miller Sayl Task Chair",
-    price: "$220",
-    status: "Reserved",
-    image: "/assets/d07b8.png",
-  },
-  {
-    name: "Patagonia Synchilla Snap-T",
-    price: "Exchange",
-    status: "Sold",
-    image: "/assets/025ac.png",
-  },
-]
-
-function Profile({ go }: { go: (route: Route) => void }) {
-  const [tab, setTab] = useState("My Listings")
-  const [editing, setEditing] = useState(false)
-  const tabs = [
-    "My Listings",
-    "My Purchases",
-    "My Rentals",
-    "My Exchanges",
-    "Reviews",
-  ]
-
-  return (
-    <main className="profile-page page-shell">
-      <section className="profile-header-panel">
-        <img
-          className="profile-avatar"
-          src="/assets/44aaf.png"
-          alt="Maya Chen"
-        />
-        <div className="profile-identity">
-          <div className="profile-name-line">
-            <h1>Maya Chen</h1>
-            <span className="verified-badge">✓ Verified student</span>
-          </div>
-          <p>Stanford University · Member since September 2023</p>
-          <p className="profile-bio">
-            Design student, amateur cyclist, and reliable finder of excellent
-            secondhand desk lamps.
-          </p>
-        </div>
-        <button className="outline-button" onClick={() => setEditing(!editing)}>
-          Edit profile
-        </button>
-      </section>
-
-      {editing && (
-        <section className="profile-editor panel">
-          <div>
-            <h2>Profile settings</h2>
-            <p>
-              Update personal details, college information, photo, and
-              preferences.
-            </p>
-          </div>
-          <button className="forest-button" onClick={() => setEditing(false)}>
-            Done
-          </button>
-        </section>
-      )}
-
-      <section
-        className="profile-stats"
-        aria-label="Example profile statistics"
-      >
-        <div>
-          <strong>3</strong>
-          <span>Active listings</span>
-        </div>
-        <div>
-          <strong>18</strong>
-          <span>Completed deals</span>
-        </div>
-        <div>
-          <strong>4.9</strong>
-          <span>Average from 12 reviews</span>
-        </div>
-        <small>Example activity data</small>
-      </section>
-
-      <nav className="profile-tabs" aria-label="Profile sections">
-        {tabs.map((item) => (
-          <button
-            className={tab === item ? "active" : ""}
-            key={item}
-            onClick={() => setTab(item)}
-          >
-            {item}
-          </button>
-        ))}
-      </nav>
-
-      {tab === "My Listings" && (
-        <section className="profile-content">
-          <div className="editorial-heading">
-            <div>
-              <div className="eyebrow">My Listings</div>
-              <h2>Things you are sharing with campus.</h2>
-            </div>
-            <button className="forest-button" onClick={() => go("/seller-hub")}>
-              Add new listing
-            </button>
-          </div>
-          <div className="profile-listing-grid">
-            {profileListings.map((listing) => (
-              <article className="profile-listing-card" key={listing.name}>
-                <img src={listing.image} alt="" />
-                <div className="profile-listing-copy">
-                  <span
-                    className={`status status-${listing.status.toLowerCase()}`}
-                  >
-                    {listing.status}
-                  </span>
-                  <h3>{listing.name}</h3>
-                  <strong>{listing.price}</strong>
-                  <div className="listing-actions">
-                    <button>Edit listing</button>
-                    <button>Manage listing →</button>
-                  </div>
-                </div>
-              </article>
-            ))}
-          </div>
-        </section>
-      )}
-
-      {tab === "Reviews" && (
-        <section className="profile-content review-section">
-          <div>
-            <div className="eyebrow">Reviews</div>
-            <h2>Notes from recent campus exchanges.</h2>
-          </div>
-          {[
-            [
-              "Alex Rivera",
-              "/assets/bda06.png",
-              "October 12, 2025",
-              "Maya was responsive, flexible on timing, and the headphones were exactly as described.",
-            ],
-            [
-              "Priya Nair",
-              "/assets/3a602.png",
-              "September 28, 2025",
-              "A smooth exchange at Tresidder. Friendly, punctual, and easy to coordinate with.",
-            ],
-          ].map(([name, avatar, date, text]) => (
-            <article className="review-row" key={name}>
-              <img src={avatar} alt="" />
-              <div>
-                <div className="review-meta">
-                  <strong>{name}</strong>
-                  <span>★★★★★</span>
-                  <time>{date}</time>
-                </div>
-                <p>{text}</p>
-              </div>
-            </article>
-          ))}
-        </section>
-      )}
-
-      {!["My Listings", "Reviews"].includes(tab) && (
-        <section className="profile-empty">
-          <span>
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#d1d5db" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/></svg>
-          </span>
-          <h2>No {tab.replace("My ", "").toLowerCase()} yet</h2>
-          <p>
-            When you complete activity in this category, it will appear here.
-          </p>
-          <button className="outline-button" onClick={() => go("/marketplace")}>
-            Explore marketplace
-          </button>
-        </section>
-      )}
-
-      <section className="settings-entry">
-        <div>
-          <h3>Profile &amp; account settings</h3>
-          <p>
-            Personal details, college information, profile photo, and
-            preferences.
-          </p>
-        </div>
-        <button onClick={() => setEditing(true)}>Open settings →</button>
-      </section>
-    </main>
-  )
-}
-
 // Pages that need a signed-in user with a completed profile.
 const PROTECTED_ROUTES: Route[] = ["/seller-hub", "/sell", "/messages", "/profile"]
 // Full-screen auth pages, rendered without the site header and footer.
-const AUTH_ROUTES: Route[] = ["/sign-in", "/register", "/forgot-password", "/verify-email", "/complete-profile", "/onboarding-next"]
-const SIGNED_OUT_ONLY_ROUTES: Route[] = ["/sign-in", "/register", "/forgot-password", "/verify-email"]
+const AUTH_ROUTES: Route[] = ["/sign-in", "/register", "/forgot-password", "/verify-email", "/create-password", "/complete-profile", "/onboarding-next"]
+const SIGNED_OUT_ONLY_ROUTES: Route[] = ["/sign-in", "/register", "/forgot-password", "/verify-email", "/create-password"]
 const RETURN_TO_KEY = "barterman-return-to"
 const DEFAULT_AFTER_AUTH = "/marketplace"
 
@@ -3397,9 +2926,11 @@ function resolveGuard(route: Route, status: AuthStatus): GuardTarget {
     case "loading":
       return null
     case "signed-out":
-      return isProtected || route === "/verify-email" || route === "/complete-profile" || route === "/onboarding-next" ? "/sign-in" : null
+      return isProtected || route === "/verify-email" || route === "/create-password" || route === "/complete-profile" || route === "/onboarding-next" ? "/sign-in" : null
     case "unverified":
       return isProtected || (isAuthRoute && route !== "/verify-email") ? "/verify-email" : null
+    case "needs-password":
+      return isProtected || (isAuthRoute && route !== "/create-password") ? "/create-password" : null
     case "needs-profile":
       return isProtected || (isAuthRoute && route !== "/complete-profile") ? "/complete-profile" : null
     case "ready":
@@ -3459,12 +2990,13 @@ export default function App() {
       {route === "/seller-hub" && <SellerHub go={go} />}
       {route === "/sell" && <Sell go={go} />}
       {route === "/messages" && <Messages go={go} />}
-      {route === "/profile" && <Profile go={go} />}
+      {route === "/profile" && <Profile go={go} navigate={navigate} />}
       {route === "/request-campus" && <RequestCampus />}
       {route === "/sign-in" && <SignIn go={go} />}
       {route === "/register" && <Register go={go} />}
       {route === "/forgot-password" && <ForgotPassword go={go} />}
       {route === "/verify-email" && <VerifyEmail />}
+      {route === "/create-password" && <CreatePassword />}
       {route === "/complete-profile" && <CompleteProfile onSaved={() => go("/onboarding-next")} />}
       {route === "/onboarding-next" && <OnboardingNext onContinue={() => navigate(takeReturnTo())} />}
       {!authRoute && <Footer go={go} route={route} />}

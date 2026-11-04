@@ -4,6 +4,7 @@ import { loadCurrentUser, optionalUser, requireAuth, requireCompleteProfile } fr
 import { listingForm } from '../middleware/upload.js';
 import { validateBody } from '../middleware/validate.js';
 import { Listing, PRIVATE_STATUSES, SELLER_PUBLIC_FIELDS } from '../models/Listing.js';
+import { SavedListing } from '../models/SavedListing.js';
 import { destroyImages, uploadListingImages } from '../services/images.js';
 import { ApiError, asyncHandler } from '../utils/http.js';
 import { listingInputSchema, listingQuerySchema, listingStatusSchema } from '../validators/listing.js';
@@ -203,6 +204,7 @@ listingsRouter.delete(
   asyncHandler(async (req, res) => {
     const listing = await findOwnedListing(req.params.id, req.user);
     await listing.deleteOne();
+    await SavedListing.deleteMany({ listing: listing._id });
     await destroyImages(listing.images.map((image) => image.publicId));
     res.status(204).end();
   }),

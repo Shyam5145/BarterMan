@@ -14,7 +14,7 @@ export const LISTING_CATEGORIES = [
 export const LISTING_CONDITIONS = ['Like New', 'Very Good', 'Good', 'Fair'];
 export const RENTAL_DURATIONS = ['Per day', 'Per week', 'Per month', 'Flexible'];
 export const LISTING_TYPES = ['for_sale', 'for_rent'];
-export const LISTING_STATUSES = ['active', 'draft', 'pending', 'sold', 'rented', 'exchanged', 'archived'];
+export const LISTING_STATUSES = ['active', 'draft', 'pending', 'sold', 'rented', 'archived'];
 /** Statuses only the owner can see. */
 export const PRIVATE_STATUSES = ['draft', 'archived'];
 /** Public seller fields included with a listing (never email or phone). */
