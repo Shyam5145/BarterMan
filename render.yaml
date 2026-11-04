@@ -1,0 +1,29 @@
+# Render Blueprint for the Barterman API (Express). The website is on Firebase Hosting.
+# Secrets marked `sync: false` are entered in the Render dashboard, never committed.
+services:
+  - type: web
+    name: barterman-api
+    runtime: node
+    plan: free
+    rootDir: server
+    buildCommand: npm ci
+    startCommand: node index.js
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      # Firebase Hosting addresses allowed by CORS.
+      - key: CLIENT_URL
+        value: https://bartermanfsd.web.app,https://bartermanfsd.firebaseapp.com
+      - key: FIREBASE_PROJECT_ID
+        value: bartermanfsd
+      - key: ALLOWED_EMAIL_DOMAINS
+        value: bmsce.ac.in
+      - key: MONGODB_URI
+        sync: false
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
