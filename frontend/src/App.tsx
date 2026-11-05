@@ -12,6 +12,10 @@ import Messages from "./pages/Messages"
 import Profile from "./pages/Profile"
 import { useWishlist } from "./context/WishlistContext"
 import { fetchWishlist, type SavedListing } from "./lib/wishlist"
+import { startConversation } from "./lib/chat"
+import { createOffer, fetchReceivedOffers } from "./lib/offers"
+import SellerOffers from "./pages/SellerOffers"
+import SellerOrders from "./pages/SellerOrders"
 import {
   deleteListing,
   fetchListing,
@@ -1168,6 +1172,22 @@ function ProductView({ go, navigate, view }: { go: (route: Route) => void; navig
   const sellerFirstName = view.seller.name.split(" ")[0] || "seller"
 
   const [offerOpen, setOfferOpen] = useState(false)
+  const { status: viewerStatus } = useAuth()
+
+  // Saves a real offer in the buyer's conversation with the seller, then opens that chat.
+  const submitOffer = async (amount: number, note: string) => {
+    if (view.isDemo || !view.listingId) {
+      go("/messages")
+      return
+    }
+    if (viewerStatus !== "ready") {
+      go("/sign-in")
+      return
+    }
+    const conversation = await startConversation(view.listingId)
+    await createOffer(conversation.id, amount, note)
+    navigate(`/messages?conversation=${encodeURIComponent(conversation.id)}`)
+  }
 
   // Opens (or creates) the real conversation with this listing's seller. The sample listing has no seller.
   // An optional draft (buy request or offer) is pre-filled in the reply box for the buyer to send.
@@ -1332,7 +1352,7 @@ function ProductView({ go, navigate, view }: { go: (route: Route) => void; navig
 
         {!view.isOwner && offerOpen && (
           <section className="mobile-section-block">
-            <OfferForm view={view} onSend={(draft) => openSellerMessages(draft)} onCancel={() => setOfferOpen(false)} />
+            <OfferForm view={view} onSubmit={submitOffer} onCancel={() => setOfferOpen(false)} />
           </section>
         )}
 
@@ -1497,7 +1517,7 @@ function ProductView({ go, navigate, view }: { go: (route: Route) => void; navig
                     {offerOpen ? "Close offer" : "Make Offer"}
                   </button>
                 </div>
-                {offerOpen && <OfferForm view={view} onSend={(draft) => openSellerMessages(draft)} onCancel={() => setOfferOpen(false)} />}
+                {offerOpen && <OfferForm view={view} onSubmit={submitOffer} onCancel={() => setOfferOpen(false)} />}
                 <button type="button" className={`pdp-save-button${saved ? " is-saved" : ""}`} onClick={toggleSaved} aria-pressed={saved}>
                   <HeartIcon filled={saved} /> {saved ? "Saved to wishlist" : "Save to wishlist"}
                 </button>
@@ -1541,17 +1561,27 @@ function ProductView({ go, navigate, view }: { go: (route: Route) => void; navig
 }
 
 /** Make Offer: pick a price, then continue in chat with the offer already written for the seller. */
-function OfferForm({ view, onSend, onCancel }: { view: ProductViewModel; onSend: (draft: string) => void; onCancel: () => void }) {
+/** Make Offer: saves a real offer (the seller sees it in Seller Hub and in chat), then opens the chat. */
+function OfferForm({ view, onSubmit, onCancel }: { view: ProductViewModel; onSubmit: (amount: number, note: string) => Promise<void>; onCancel: () => void }) {
   const [amount, setAmount] = useState("")
+  const [note, setNote] = useState("")
   const [error, setError] = useState("")
+  const [sending, setSending] = useState(false)
 
-  const submit = (event: FormEvent) => {
+  const submit = async (event: FormEvent) => {
     event.preventDefault()
     const value = Number(amount)
     if (!amount.trim() || !Number.isFinite(value) || value <= 0) return setError("Enter the price you'd like to offer.")
     if (!Number.isInteger(value)) return setError("Use a whole number of rupees.")
     if (value > 10_000_000) return setError("That offer is too high.")
-    onSend(`Hi! I'd like to offer ${formatInr(value)} for "${view.title}" (listed at ${view.displayPrice}). Would that work for you?`)
+    setSending(true)
+    setError("")
+    try {
+      await onSubmit(value, note.trim())
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "We couldn't send your offer. Please try again.")
+      setSending(false)
+    }
   }
 
   return (
@@ -1571,11 +1601,20 @@ function OfferForm({ view, onSend, onCancel }: { view: ProductViewModel; onSend:
           autoFocus
         />
       </div>
-      <p className="pdp-offer-hint">Asking {view.displayPrice}. Sending opens a chat with the seller, where you can agree on the final price.</p>
+      <label htmlFor="offer-note" className="pdp-offer-note-label">Note to seller <span>Optional</span></label>
+      <input
+        id="offer-note"
+        className="pdp-offer-note"
+        maxLength={300}
+        value={note}
+        onChange={(event) => setNote(event.target.value)}
+        placeholder="e.g. Can pick up today after class"
+      />
+      <p className="pdp-offer-hint">Asking {view.displayPrice}. The seller can accept, decline or counter, and you'll continue in chat.</p>
       {error && <p className="pdp-offer-error" role="alert">{error}</p>}
       <div className="pdp-offer-buttons">
-        <button type="button" className="secondary" onClick={onCancel}>Cancel</button>
-        <button type="submit" className="primary">Send offer in chat</button>
+        <button type="button" className="secondary" onClick={onCancel} disabled={sending}>Cancel</button>
+        <button type="submit" className="primary" disabled={sending}>{sending ? "Sending…" : "Send offer"}</button>
       </div>
     </form>
   )
@@ -2232,17 +2271,6 @@ const sellerHubNavItems: Array<{ label: SellerHubTab; hint: string; icon: string
   { label: "Settings", hint: "Account", icon: "⚙" },
 ]
 
-const sellerOffers = [
-  { id: "offer-1", buyer: "Alex Rivera", product: "Sony WH-1000XM4 Headphones", amount: "₹13,200", status: "Pending", message: "Can we meet at the library after 5pm?" },
-  { id: "offer-2", buyer: "Aanya Nair", product: "Study Desk with Drawer", amount: "₹8,300", status: "Countered", message: "I can pick it up this weekend if you can drop it to the campus gate." },
-  { id: "offer-3", buyer: "Rishabh S.", product: "Micro-fridge", amount: "₹7,100", status: "Pending", message: "Would you accept a same-day handoff?" },
-]
-
-const sellerTransactions = [
-  { id: "txn-1", title: "Sony WH-1000XM4 Headphones", type: "Sale", status: "Completed", date: "Oct 12, 2026" },
-  { id: "txn-2", title: "Fujifilm X-T30 II", type: "Rental", status: "Active rental", date: "Oct 18, 2026" },
-  { id: "txn-3", title: "Patagonia Snap-T", type: "Exchange", status: "Pending handoff", date: "Oct 20, 2026" },
-]
 
 const SELLER_LISTING_FILTERS: Array<{ value: "All" | ListingStatus; label: string }> = [
   { value: "All", label: "All" },
@@ -2254,7 +2282,7 @@ const SELLER_LISTING_FILTERS: Array<{ value: "All" | ListingStatus; label: strin
   { value: "archived", label: "Archived" },
 ]
 
-function SellerHub({ go }: { go: (route: Route) => void }) {
+function SellerHub({ go, navigate }: { go: (route: Route) => void; navigate: (href: string) => void }) {
   const isMobile = useIsMobile()
   const { user } = useAuth()
   const sellerName = user?.name ?? "Seller"
@@ -2349,7 +2377,16 @@ function SellerHub({ go }: { go: (route: Route) => void }) {
 
   const activeListingCount = listings.filter((listing) => listing.status === "active").length
   const soldItemCount = listings.filter((listing) => listing.status === "sold").length
-  const pendingOfferCount = sellerOffers.filter((offer) => offer.status === "Pending").length
+  const draftCount = listings.filter((listing) => listing.status === "draft").length
+  const [pendingOfferCount, setPendingOfferCount] = useState<number | null>(null)
+  useEffect(() => {
+    fetchReceivedOffers("pending").then(({ pendingCount }) => setPendingOfferCount(pendingCount)).catch(() => {})
+  }, [])
+  // Overview "Recent activity": the seller's own listings, most recently changed first.
+  const recentListings = useMemo(
+    () => [...listings].sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()).slice(0, 5),
+    [listings],
+  )
   const { unreadTotal: unreadBuyerMessages } = useRealtime()
 
   const changeListingStatus = async (listingId: string, nextStatus: Exclude<ListingStatus, "draft">) => {
@@ -2413,11 +2450,11 @@ function SellerHub({ go }: { go: (route: Route) => void }) {
           <strong>{soldItemCount}</strong>
           <small>Completed sales</small>
         </article>
-        <article className="seller-metric-card">
+        <button type="button" className="seller-metric-card sh-metric-button" onClick={() => setActiveTab("Offers & Negotiations")}>
           <span>Pending offers</span>
-          <strong>{pendingOfferCount}</strong>
-          <small>Awaiting seller review</small>
-        </article>
+          <strong>{pendingOfferCount ?? "–"}</strong>
+          <small>{draftCount ? `${draftCount} draft${draftCount === 1 ? "" : "s"} not published` : "Awaiting your reply"}</small>
+        </button>
         <article className="seller-metric-card">
           <span>Unread buyer messages</span>
           <strong>{unreadBuyerMessages}</strong>
@@ -2429,27 +2466,40 @@ function SellerHub({ go }: { go: (route: Route) => void }) {
         <section className="seller-panel">
           <div className="seller-panel-header">
             <h2>Recent activity</h2>
-            <button className="ghost-button" onClick={() => setActiveTab("Orders & Rentals")}>View all</button>
+            <button className="ghost-button" onClick={() => setActiveTab("My Listings")}>View all</button>
           </div>
 
-          {sellerTransactions.length ? (
+          {listingsState === "loading" && <div className="seller-empty-block" role="status">Loading your listings…</div>}
+          {listingsState === "error" && <div className="seller-empty-block" role="alert">{listingsError}</div>}
+          {listingsState === "ready" && (recentListings.length ? (
             <div className="seller-transaction-list">
-              {sellerTransactions.map((transaction) => (
-                <div key={transaction.id} className="seller-transaction-item">
+              {recentListings.map((listing) => (
+                <button
+                  key={listing.id}
+                  type="button"
+                  className="seller-transaction-item sh-activity-item"
+                  onClick={() => (listing.status === "draft" ? openEditor(listing.id) : go(`/product/${listing.id}`))}
+                >
                   <div>
-                    <strong>{transaction.title}</strong>
-                    <span>{transaction.type}</span>
+                    <strong>{listing.title || "Untitled draft"}</strong>
+                    <span>
+                      {listingTypeLabel(listing)}
+                      {listing.price !== null || listing.rentalPrice !== null ? ` · ${formatListingPrice(listing)}` : ""}
+                      {listing.status !== "draft" ? ` · ${listing.views} view${listing.views === 1 ? "" : "s"}` : ""}
+                    </span>
                   </div>
                   <div>
-                    <span className="seller-status-badge">{transaction.status}</span>
-                    <small>{transaction.date}</small>
+                    <span className="seller-status-badge">{statusLabel(listing.status)}</span>
+                    <small>{new Date(listing.updatedAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</small>
                   </div>
-                </div>
+                </button>
               ))}
             </div>
           ) : (
-            <div className="seller-empty-block">No transaction activity yet.</div>
-          )}
+            <div className="seller-empty-block">
+              No activity yet. <button type="button" className="market-inline-link" onClick={() => openEditor(null)}>Create your first listing →</button>
+            </div>
+          ))}
         </section>
 
         <section className="seller-panel">
@@ -2574,100 +2624,22 @@ function SellerHub({ go }: { go: (route: Route) => void }) {
   )
 
   const renderOffers = () => (
-    <div className="seller-dashboard-section">
-      <div className="seller-section-header">
-        <div>
-          <span className="eyebrow">Deals</span>
-          <h1>Offers &amp; Negotiations</h1>
-        </div>
-      </div>
-
-      <div className="seller-offer-list">
-        {sellerOffers.map((offer) => (
-          <article key={offer.id} className="seller-panel seller-offer-card">
-            <div className="seller-offer-head">
-              <div>
-                <strong>{offer.buyer}</strong>
-                <span>{offer.product}</span>
-              </div>
-              <span className="seller-status-badge">{offer.status}</span>
-            </div>
-            <div className="seller-offer-amount">
-              <strong>{offer.amount}</strong>
-              <small>Buyer offer</small>
-            </div>
-            <p>{offer.message}</p>
-            <div className="seller-offer-actions">
-              <button className="primary" onClick={() => go("/messages")}>Accept</button>
-              <button className="secondary" onClick={() => go("/messages")}>Counteroffer</button>
-              <button className="ghost-button" onClick={() => go("/messages")}>Reject</button>
-              <button className="secondary" onClick={() => go("/messages")}>Open conversation</button>
-            </div>
-          </article>
-        ))}
-      </div>
-    </div>
+    <SellerOffers
+      openConversation={(conversationId) => navigate(`/messages?conversation=${encodeURIComponent(conversationId)}`)}
+      onPendingCount={setPendingOfferCount}
+    />
   )
 
   const renderOrders = () => (
-    <div className="seller-dashboard-section">
-      <div className="seller-section-header">
-        <div>
-          <span className="eyebrow">Orders</span>
-          <h1>Orders &amp; Rentals</h1>
-        </div>
-      </div>
-
-      <div className="seller-two-column-layout">
-        <section className="seller-panel">
-          <div className="seller-panel-header">
-            <h2>Sales</h2>
-          </div>
-          <div className="seller-transaction-list">
-            {sellerTransactions.filter((item) => item.type === "Sale").length ? (
-              sellerTransactions.filter((item) => item.type === "Sale").map((item) => (
-                <div key={item.id} className="seller-transaction-item">
-                  <div>
-                    <strong>{item.title}</strong>
-                    <span>{item.type}</span>
-                  </div>
-                  <div>
-                    <span className="seller-status-badge">{item.status}</span>
-                    <small>{item.date}</small>
-                  </div>
-                </div>
-              ))
-            ) : (
-              <div className="seller-empty-block">No sale records yet.</div>
-            )}
-          </div>
-        </section>
-
-        <section className="seller-panel">
-          <div className="seller-panel-header">
-            <h2>Rentals &amp; Exchanges</h2>
-          </div>
-          <div className="seller-transaction-list">
-            {sellerTransactions.filter((item) => item.type !== "Sale").length ? (
-              sellerTransactions.filter((item) => item.type !== "Sale").map((item) => (
-                <div key={item.id} className="seller-transaction-item">
-                  <div>
-                    <strong>{item.title}</strong>
-                    <span>{item.type}</span>
-                  </div>
-                  <div>
-                    <span className="seller-status-badge">{item.status}</span>
-                    <small>{item.date}</small>
-                  </div>
-                </div>
-              ))
-            ) : (
-              <div className="seller-empty-block">No rental or exchange records yet.</div>
-            )}
-          </div>
-        </section>
-      </div>
-    </div>
+    <SellerOrders
+      listings={listings}
+      listingsState={listingsState}
+      busyListingId={busyListingId}
+      onChangeStatus={changeListingStatus}
+      openConversation={(conversationId) => navigate(`/messages?conversation=${encodeURIComponent(conversationId)}`)}
+      viewListing={(listingId) => go(`/product/${listingId}`)}
+      onBrowseListings={() => setActiveTab("My Listings")}
+    />
   )
 
   const renderSavedMessages = () => <Messages go={go} embedded />
@@ -2987,7 +2959,7 @@ export default function App() {
       {route.startsWith("/product/") && (
         <Product key={route} go={go} navigate={navigate} listingId={decodeURIComponent(route.slice("/product/".length))} />
       )}
-      {route === "/seller-hub" && <SellerHub go={go} />}
+      {route === "/seller-hub" && <SellerHub go={go} navigate={navigate} />}
       {route === "/sell" && <Sell go={go} />}
       {route === "/messages" && <Messages go={go} />}
       {route === "/profile" && <Profile go={go} navigate={navigate} />}

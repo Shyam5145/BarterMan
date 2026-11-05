@@ -5,6 +5,7 @@ import { errorHandler, notFound } from './middleware/errorHandler.js';
 import { authRouter } from './routes/auth.routes.js';
 import { conversationsRouter } from './routes/conversations.routes.js';
 import { listingsRouter } from './routes/listings.routes.js';
+import { offersRouter } from './routes/offers.routes.js';
 import { usersRouter } from './routes/users.routes.js';
 import { wishlistRouter } from './routes/wishlist.routes.js';
 
@@ -30,6 +31,7 @@ v1.use('/users/me/wishlist', wishlistRouter);
 v1.use('/users', usersRouter);
 v1.use('/listings', listingsRouter);
 v1.use('/conversations', conversationsRouter);
+v1.use('/offers', offersRouter);
 app.use('/api/v1', v1);
 
 app.use('/api', notFound);

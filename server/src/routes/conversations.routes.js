@@ -225,39 +225,48 @@ conversationsRouter.post(
   asyncHandler(async (req, res) => {
     const me = req.user._id;
     const existing = await findParticipantConversation(req.params.id, req.user);
-    const role = existing.roleOf(me);
-    const otherRole = role === 'buyer' ? 'seller' : 'buyer';
-    const otherId = existing[otherRole];
-
-    const message = await Message.create({ conversation: existing._id, sender: me, text: req.body.text });
-    const now = message.createdAt;
-
-    // Sending counts as reading everything before it.
-    const conversation = await withDetails(
-      Conversation.findByIdAndUpdate(
-        existing._id,
-        {
-          $set: {
-            lastMessage: { text: message.text.slice(0, PREVIEW_LENGTH), sender: me, createdAt: now },
-            lastMessageAt: now,
-            [`${role}Unread`]: 0,
-            [`${role}LastReadAt`]: now,
-          },
-          $inc: { [`${otherRole}Unread`]: 1 },
-        },
-        { new: true },
-      ),
-    );
-
-    const payload = message.toJSON();
-    const { clientId } = req.body;
-    emitToUser(me, 'message:new', { conversation: serializeConversation(conversation, me), message: payload, clientId });
-    emitToUser(otherId, 'message:new', { conversation: serializeConversation(conversation, otherId), message: payload });
-    await Promise.all([pushUnreadCount(otherId), pushUnreadCount(me)]);
-
-    res.status(201).json({ message: payload, conversation: serializeConversation(conversation, me) });
+    const result = await postMessage(existing, me, req.body.text, req.body.clientId);
+    res.status(201).json(result);
   }),
 );
+
+/**
+ * Saves a message in a conversation and pushes it live to both people. Also used by offers,
+ * which post their own messages ("Offer: ₹800 …") into the chat.
+ */
+export async function postMessage(existing, senderId, text, clientId) {
+  const role = existing.roleOf(senderId);
+  if (!role) throw notFound();
+  const otherRole = role === 'buyer' ? 'seller' : 'buyer';
+  const otherId = existing[otherRole]?._id ?? existing[otherRole];
+
+  const message = await Message.create({ conversation: existing._id, sender: senderId, text });
+  const now = message.createdAt;
+
+  // Sending counts as reading everything before it.
+  const conversation = await withDetails(
+    Conversation.findByIdAndUpdate(
+      existing._id,
+      {
+        $set: {
+          lastMessage: { text: message.text.slice(0, PREVIEW_LENGTH), sender: senderId, createdAt: now },
+          lastMessageAt: now,
+          [`${role}Unread`]: 0,
+          [`${role}LastReadAt`]: now,
+        },
+        $inc: { [`${otherRole}Unread`]: 1 },
+      },
+      { new: true },
+    ),
+  );
+
+  const payload = message.toJSON();
+  emitToUser(senderId, 'message:new', { conversation: serializeConversation(conversation, senderId), message: payload, clientId });
+  emitToUser(otherId, 'message:new', { conversation: serializeConversation(conversation, otherId), message: payload });
+  await Promise.all([pushUnreadCount(otherId), pushUnreadCount(senderId)]);
+
+  return { message: payload, conversation: serializeConversation(conversation, senderId) };
+}
 
 // Marks the thread read for the signed-in user and tells the other person (read receipt).
 conversationsRouter.post(
