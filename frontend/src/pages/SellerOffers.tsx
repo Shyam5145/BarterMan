@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react"
+import { useAuth } from "../context/AuthContext"
+import { useRealtime } from "../context/RealtimeContext"
 import { Avatar } from "../components/Avatar"
-import { fetchReceivedOffers, respondToOffer, type Offer, type OfferStatus } from "../lib/offers"
+import { fetchReceivedOffers, respondToOffer, type Offer, type OfferStatus, type OfferUpdatedEvent } from "../lib/offers"
 import { formatInr } from "../lib/listings"
 
 const FILTERS: Array<{ id: OfferStatus | "all"; label: string }> = [
@@ -9,6 +11,7 @@ const FILTERS: Array<{ id: OfferStatus | "all"; label: string }> = [
   { id: "accepted", label: "Accepted" },
   { id: "countered", label: "Countered" },
   { id: "rejected", label: "Declined" },
+  { id: "withdrawn", label: "Withdrawn" },
 ]
 
 const STATUS_LABELS: Record<OfferStatus, string> = {
@@ -16,6 +19,8 @@ const STATUS_LABELS: Record<OfferStatus, string> = {
   accepted: "Accepted",
   countered: "Countered",
   rejected: "Declined",
+  withdrawn: "Withdrawn",
+  replaced: "Replaced",
 }
 
 const dateFormat = new Intl.DateTimeFormat("en-IN", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })
@@ -55,6 +60,26 @@ export default function SellerOffers({ openConversation, onPendingCount }: {
       })
     return () => { cancelled = true }
   }, [reloadKey, onPendingCount])
+
+  // Live: offers made or answered anywhere (the chat's deal bar, another tab, the buyer) show up here.
+  const { socket } = useRealtime()
+  const { user } = useAuth()
+  const myId = user?.id
+  useEffect(() => {
+    if (!socket) return
+    const onOffer = ({ offer }: OfferUpdatedEvent) => {
+      // The same event reaches buyers; only offers on this seller's listings belong here.
+      if (offer.sellerId !== myId) return
+      setOffers((current) => {
+        const without = current.filter((item) => item.id !== offer.id)
+        const next = offer.status === "replaced" ? without : [offer, ...without].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        onPendingCount?.(next.filter((item) => item.status === "pending").length)
+        return next
+      })
+    }
+    socket.on("offer:updated", onOffer)
+    return () => { socket.off("offer:updated", onOffer) }
+  }, [socket, onPendingCount, myId])
 
   const visible = useMemo(() => (filter === "all" ? offers : offers.filter((offer) => offer.status === filter)), [offers, filter])
   const counts = useMemo(() => {
@@ -160,6 +185,9 @@ export default function SellerOffers({ openConversation, onPendingCount }: {
                 )}
                 {offer.status === "accepted" && <p className="so-outcome">You accepted this offer. Arrange the pickup in chat, then mark the listing sold.</p>}
                 {offer.status === "rejected" && <p className="so-outcome">You declined this offer.</p>}
+                {offer.status === "withdrawn" && (
+                  <p className="so-outcome">{offer.counterAmount !== null ? `The buyer declined your counteroffer of ${formatInr(offer.counterAmount)}.` : "The buyer withdrew this offer."}</p>
+                )}
 
                 {counteringId === offer.id ? (
                   <CounterForm

@@ -234,13 +234,14 @@ conversationsRouter.post(
  * Saves a message in a conversation and pushes it live to both people. Also used by offers,
  * which post their own messages ("Offer: ₹800 …") into the chat.
  */
-export async function postMessage(existing, senderId, text, clientId) {
+/** `offer` ({ id, event, amount, note }) marks messages created by offer actions so they render as offer cards. */
+export async function postMessage(existing, senderId, text, clientId, offer) {
   const role = existing.roleOf(senderId);
   if (!role) throw notFound();
   const otherRole = role === 'buyer' ? 'seller' : 'buyer';
   const otherId = existing[otherRole]?._id ?? existing[otherRole];
 
-  const message = await Message.create({ conversation: existing._id, sender: senderId, text });
+  const message = await Message.create({ conversation: existing._id, sender: senderId, text, ...(offer ? { offer } : {}) });
   const now = message.createdAt;
 
   // Sending counts as reading everything before it.

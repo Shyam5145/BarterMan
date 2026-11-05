@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react"
 import { Avatar } from "../components/Avatar"
+import { OfferCard, OfferComposer } from "../components/OfferCards"
+import { fetchConversationOffer, type Offer, type OfferUpdatedEvent } from "../lib/offers"
 import { useAuth } from "../context/AuthContext"
 import { useRealtime } from "../context/RealtimeContext"
 import { useIsMobile } from "../hooks/useIsMobile"
@@ -131,6 +133,10 @@ export default function Messages({ go, embedded = false }: { go: (route: Message
   const [search, setSearch] = useState("")
   const [notice, setNotice] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
+  // Latest offer per conversation (null = none yet); decides which offer card shows actions.
+  const [offers, setOffers] = useState<Record<string, Offer | null>>({})
+  // Conversation whose "₹ Offer" composer is open.
+  const [offerComposerFor, setOfferComposerFor] = useState<string | null>(null)
 
   const activeIdRef = useRef(activeId)
   const chatBodyRef = useRef<HTMLDivElement>(null)
@@ -312,6 +318,30 @@ export default function Messages({ go, embedded = false }: { go: (route: Message
     if (activeId && !threads[activeId]) void loadThread(activeId)
   }, [activeId, threads, loadThread])
 
+  const loadOffer = useCallback((conversationId: string) => {
+    fetchConversationOffer(conversationId)
+      .then((offer) => setOffers((previous) => ({ ...previous, [conversationId]: offer })))
+      .catch(() => setOffers((previous) => ({ ...previous, [conversationId]: null })))
+  }, [])
+
+  // And its current offer, for the deal bar.
+  useEffect(() => {
+    if (activeId && !(activeId in offers)) loadOffer(activeId)
+  }, [activeId, offers, loadOffer])
+
+  const setOffer = useCallback((offer: Offer) => {
+    if (offer.status === "replaced") return // a newer offer follows
+    setOffers((previous) => ({ ...previous, [offer.conversationId]: offer }))
+  }, [])
+
+  const setListingStatus = useCallback((conversationId: string, status: "sold" | "rented") => {
+    setConversations((previous) =>
+      previous.map((conversation) =>
+        conversation.id === conversationId ? { ...conversation, listing: { ...conversation.listing, status } } : conversation,
+      ),
+    )
+  }, [])
+
   // Mark the open conversation read while the tab is visible.
   const activeUnread = activeConversation?.unreadCount ?? 0
   useEffect(() => {
@@ -365,22 +395,29 @@ export default function Messages({ go, embedded = false }: { go: (route: Message
       fetchConversations()
         .then((items) => setConversations(sortConversations(items)))
         .catch(() => {})
-      if (activeIdRef.current) void loadThread(activeIdRef.current)
+      if (activeIdRef.current) {
+        void loadThread(activeIdRef.current)
+        loadOffer(activeIdRef.current)
+      }
     }
+    const onOffer = ({ offer }: OfferUpdatedEvent) => setOffer(offer)
 
     socket.on("message:new", onMessage)
     socket.on("conversation:read", onRead)
     socket.on("typing", onTyping)
     socket.on("connect", onConnect)
+    socket.on("offer:updated", onOffer)
     return () => {
       socket.off("message:new", onMessage)
       socket.off("conversation:read", onRead)
       socket.off("typing", onTyping)
       socket.off("connect", onConnect)
+      socket.off("offer:updated", onOffer)
       typingTimers.forEach((timer) => window.clearTimeout(timer))
       typingTimers.clear()
     }
-  }, [socket, myId, upsertConversation, settleMessage, loadThread])
+  }, [socket, myId, upsertConversation, settleMessage, loadThread, loadOffer, setOffer])
+
 
   const stopTyping = useCallback(
     (conversationId: string) => {
@@ -608,6 +645,24 @@ export default function Messages({ go, embedded = false }: { go: (route: Message
         <span className="chat-delivery">{deliveryLabel(conversation, message)}</span>
       ) : null
 
+      // Offer steps (offer, counter, accepted…) render as offer cards with their actions.
+      if (message.offer) {
+        return (
+          <div className={`chat-row ${outgoing ? "outgoing" : "incoming"}`} key={message.clientId ?? message.id}>
+            {separator}
+            <OfferCard
+              message={message as DisplayMessage & { offer: NonNullable<ChatMessage["offer"]> }}
+              outgoing={outgoing}
+              conversation={conversation}
+              latest={offers[conversation.id]}
+              time={time}
+              onOfferChange={setOffer}
+              onListingSold={(listingStatus) => setListingStatus(conversation.id, listingStatus)}
+            />
+          </div>
+        )
+      }
+
       const bubble = mobile ? (
         <div className={outgoing ? "mobile-message-row outgoing" : "mobile-message-row incoming"}>
           <div className={`mobile-message-bubble ${outgoing ? "outgoing" : "incoming"}${message.pending ? " is-pending" : ""}`}>
@@ -665,8 +720,26 @@ export default function Messages({ go, embedded = false }: { go: (route: Message
     )
   }
 
+  const canOffer = (conversation: Conversation) =>
+    conversation.role === "buyer" && (conversation.listing.status === "active" || conversation.listing.status === "pending")
+
   const renderReply = (conversation: Conversation, mobile: boolean) => (
+    <>
+      {offerComposerFor === conversation.id && (
+        <OfferComposer conversation={conversation} onOfferChange={setOffer} onClose={() => setOfferComposerFor(null)} />
+      )}
     <form className={mobile ? "reply mobile-reply" : "reply"} onSubmit={(event) => submitDraft(event, conversation.id)}>
+      {canOffer(conversation) && (
+        <button
+          type="button"
+          className="oc-offer-button"
+          onClick={() => setOfferComposerFor((current) => (current === conversation.id ? null : conversation.id))}
+          aria-expanded={offerComposerFor === conversation.id}
+          title="Make an offer"
+        >
+          ₹ Offer
+        </button>
+      )}
       <input
         value={drafts[conversation.id] ?? ""}
         onChange={(event) => changeDraft(conversation.id, event.target.value)}
@@ -681,6 +754,7 @@ export default function Messages({ go, embedded = false }: { go: (route: Message
         Send
       </button>
     </form>
+    </>
   )
 
   const renderInboxEmpty = () => (

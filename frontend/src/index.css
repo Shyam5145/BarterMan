@@ -4344,3 +4344,56 @@ input:focus, select:focus, textarea:focus {
   .orders-row-main { grid-template-columns: auto minmax(0, 1fr); }
   .orders-row-main > .so-status { grid-column: 1 / -1; justify-self: start; }
 }
+
+
+/* Offer cards inside the chat (offer made / counter offer / accepted / declined) */
+.oc-wrap { display: grid; gap: .35rem; width: min(100%, 26rem); }
+.oc-out { justify-items: end; }
+.oc-in { justify-items: start; }
+.oc { display: grid; gap: .7rem; width: 100%; padding: .9rem 1.05rem; border: 1px solid #e3e7e3; border-radius: 16px; background: #fff; box-shadow: 0 6px 18px rgba(18, 22, 24, .06); }
+.oc-offer { border-color: #bfd9d1; background: #eef6f3; }
+.oc-counter { background: #fff; }
+.oc-done { border-color: #bfd9d1; background: linear-gradient(180deg, #eef6f3, #fff); }
+.oc-closed { background: #f7f7f5; box-shadow: none; }
+.oc-muted { opacity: .7; }
+.oc-head { display: inline-flex; align-items: center; gap: .45rem; width: fit-content; color: var(--charcoal); font-size: .74rem; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
+.oc-offer .oc-head { padding: .25rem .65rem .25rem .45rem; border-radius: 999px; background: #d7ebe4; color: var(--teal); }
+.oc-done .oc-head { color: var(--teal); }
+.oc-closed .oc-head { color: #8a5446; }
+.oc-icon { display: inline-grid; place-items: center; color: inherit; }
+.oc-offer .oc-icon { color: var(--teal); }
+.oc-body { display: flex; align-items: center; gap: 1.1rem; }
+.oc-amount { color: var(--charcoal); font-size: 2.15rem; font-weight: 800; letter-spacing: -.03em; line-height: 1; white-space: nowrap; }
+.oc-closed .oc-amount { color: #6b7280; text-decoration: line-through; text-decoration-thickness: 2px; }
+.oc-for { display: grid; gap: .1rem; min-width: 0; padding-left: 1.1rem; border-left: 1px solid #d5dcd7; color: var(--charcoal); font-size: .86rem; overflow-wrap: anywhere; }
+.oc-for small { color: var(--text-secondary); font-size: .74rem; }
+.oc-note { padding: .5rem .7rem; border-radius: 10px; background: rgb(255 255 255 / 70%); color: var(--charcoal); font-size: .84rem; }
+.oc-state { color: var(--text-secondary); font-size: .78rem; font-weight: 600; }
+.oc-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.oc-actions-outside { justify-content: flex-end; }
+.oc .oc-actions > .oc-btn { flex: 1 1 0; }
+.oc-btn { display: inline-flex; align-items: center; justify-content: center; gap: .4rem; min-height: 2.35rem; padding: .4rem .95rem; border-radius: 10px; font-size: .86rem; font-weight: 700; white-space: nowrap; }
+.oc-btn-solid { border: 1px solid var(--teal); background: var(--teal); color: #fff; }
+.oc-btn-solid:hover { background: var(--deep-teal, #245e57); filter: none; }
+.oc-btn-outline { border: 1px solid var(--teal); background: #fff; color: var(--teal); }
+.oc-btn-outline:hover { background: var(--pale-sage); filter: none; }
+.oc-btn-ghost { border: 1px solid transparent; background: transparent; color: #b4412a; }
+.oc-btn-ghost:hover { background: #fff1ec; filter: none; }
+.oc-btn:disabled { cursor: not-allowed; opacity: .55; }
+.oc-foot { display: flex; align-items: center; gap: .6rem; }
+.oc-time { color: var(--text-secondary); font-size: .68rem; }
+.oc-error { color: #9b3b25; font-size: .78rem; font-weight: 600; }
+.oc-form { display: grid; gap: .55rem; }
+.oc-form label { display: grid; gap: .3rem; color: var(--charcoal); font-size: .76rem; font-weight: 700; }
+.oc-form .pdp-offer-input input { padding-block: .5rem; font-size: 1.05rem; }
+.oc-form-only { padding: .8rem; }
+.oc-composer { flex-shrink: 0; padding: .7rem 1.25rem; border-top: 1px solid #eceee9; background: #fbfaf8; }
+.oc-composer .oc-form { max-width: 26rem; }
+.oc-offer-button { flex: 0 0 auto; padding: .5rem .85rem; border: 1px solid var(--teal); border-radius: 999px; background: #fff; color: var(--teal); font-size: .82rem; font-weight: 800; white-space: nowrap; }
+.oc-offer-button:hover, .oc-offer-button[aria-expanded="true"] { background: var(--pale-sage); filter: none; }
+@media (max-width: 760px) {
+  .oc-wrap { width: min(100%, 22rem); }
+  .oc-amount { font-size: 1.75rem; }
+  .oc-composer { padding: .65rem .85rem; }
+  .mobile-reply .oc-offer-button { padding: .45rem .65rem; }
+}

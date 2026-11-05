@@ -2,9 +2,10 @@ import mongoose from 'mongoose';
 
 /**
  * A buyer's price offer on a listing, made inside their conversation with the seller.
- * pending → accepted | rejected | countered (seller's reply), or replaced by the buyer's newer offer.
+ * pending → accepted | rejected | countered (seller's reply), withdrawn (buyer), or replaced by the buyer's newer offer.
+ * countered → accepted (buyer takes the counter price) | withdrawn (buyer declines it).
  */
-export const OFFER_STATUSES = ['pending', 'accepted', 'rejected', 'countered', 'replaced'];
+export const OFFER_STATUSES = ['pending', 'accepted', 'rejected', 'countered', 'withdrawn', 'replaced'];
 export const MAX_OFFER_AMOUNT = 10_000_000;
 
 const offerSchema = new mongoose.Schema(

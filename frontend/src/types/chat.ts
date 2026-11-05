@@ -38,12 +38,17 @@ export type Conversation = {
   createdAt: string
 }
 
+/** What an offer message records; the chat shows these as offer cards. */
+export type OfferEvent = "offer" | "counter" | "accepted" | "rejected" | "withdrawn" | "counter_accepted" | "counter_declined"
+
 export type ChatMessage = {
   id: string
   conversationId: string
   senderId: string
   text: string
   createdAt: string
+  /** Present on messages posted by an offer action. */
+  offer?: { id: string; event: OfferEvent; amount: number; note: string }
 }
 
 /** Socket.IO events pushed by the server. */
